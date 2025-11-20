@@ -196,7 +196,6 @@ def get_file(s3_client, file_path):
     # Serve the file from the cache
     return send_file(local_path, mimetype=mimetype)
 
-@with_s3_client
 def directory_listing(s3_client, prefix):
     """Generate a directory listing for a given prefix."""
     # Normalize prefix for S3

@@ -1,0 +1,9 @@
+{
+  "startUrl": "https://my-sso-portal.awsapps.com/start",
+  "region": "sa-east-1",
+  "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IlRlc3QgVXNlciIsImlhdCI6MTUxNjIzOTAyMn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
+  "expiresAt": "2025-12-31T23:59:59Z",
+  "clientId": "test-client-id",
+  "clientSecret": "test-client-secret",
+  "registrationExpiresAt": "2026-12-31T23:59:59Z"
+}

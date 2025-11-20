@@ -170,6 +170,125 @@ A: Verify that your AWS authentication is working with `aws s3 ls s3://your-buck
 **Q: Artifacts aren't being found**
 A: Ensure your S3 bucket is correctly configured in `.env` and that the path structure matches what Bazel expects.
 
+## Testing
+
+This project includes comprehensive unit and integration tests to ensure reliability.
+
+### Running Tests
+
+#### Install Test Dependencies
+
+```bash
+pip install -r tests/requirements.txt
+```
+
+#### Run All Tests
+
+```bash
+# Run all tests with coverage
+pytest
+
+# Run only unit tests (fast)
+pytest -m unit
+
+# Run only integration tests (slower, requires Docker)
+pytest -m integration
+
+# Run with verbose output
+pytest -v
+
+# Run specific test file
+pytest tests/unit/test_credential_renewer.py
+
+# Run specific test function
+pytest tests/unit/test_credential_renewer.py::TestFindSSOTokenFile::test_find_token_file_with_single_file
+```
+
+#### Test Coverage
+
+```bash
+# Generate coverage report
+pytest --cov-report=html
+
+# Open coverage report in browser
+open htmlcov/index.html
+```
+
+### Test Organization
+
+Tests are organized into:
+
+- **Unit Tests** (`tests/unit/`): Fast tests that mock external dependencies
+  - `test_credential_renewer.py` - Tests for credential renewal logic
+  - `test_s3proxy.py` - Tests for S3 proxy and caching
+  - `test_credential_monitor.py` - Tests for file monitoring
+
+- **Integration Tests** (`tests/integration/`): Tests that verify service interaction
+  - `test_credential_flow.py` - End-to-end credential management tests
+
+- **Test Fixtures** (`tests/fixtures/`): Sample data files used by tests
+
+### Test Markers
+
+Tests are marked with categories for selective execution:
+
+- `@pytest.mark.unit` - Fast unit tests (no external dependencies)
+- `@pytest.mark.integration` - Integration tests (may use Docker)
+- `@pytest.mark.slow` - Tests that take significant time
+- `@pytest.mark.aws` - Tests that interact with AWS (mocked or real)
+- `@pytest.mark.docker` - Tests that require Docker
+
+Example:
+
+```bash
+# Run only fast unit tests
+pytest -m unit
+
+# Skip slow tests
+pytest -m "not slow"
+
+# Run AWS-related tests
+pytest -m aws
+```
+
+### Writing New Tests
+
+When adding new functionality:
+
+1. Write unit tests for individual functions
+2. Add integration tests for service interactions
+3. Use fixtures from `tests/conftest.py` for common test setup
+4. Ensure test coverage remains above 70%
+
+Example test structure:
+
+```python
+import pytest
+
+def test_my_function():
+    """Test description."""
+    # Arrange
+    input_data = "test"
+
+    # Act
+    result = my_function(input_data)
+
+    # Assert
+    assert result == expected_output
+```
+
+### Continuous Testing
+
+For development, you can run tests automatically on file changes:
+
+```bash
+# Install pytest-watch
+pip install pytest-watch
+
+# Run tests on change
+ptw -- -m unit
+```
+
 ## How It Works
 
 ### Credential Monitor Service
