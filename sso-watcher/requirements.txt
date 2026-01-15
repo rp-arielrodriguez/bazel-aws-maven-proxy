@@ -1,0 +1,2 @@
+# SSO Watcher has no Python dependencies
+# Uses only Python stdlib

@@ -1,0 +1,99 @@
+# mise configuration for bazel-aws-maven-proxy
+# https://mise.jdx.dev/
+
+[tools]
+python = "3.11"
+
+[tasks.start]
+description = "Start complete system (Docker services + SSO watcher)"
+depends = ["docker:up", "sso-install"]
+
+[tasks.stop]
+description = "Stop complete system (Docker services + SSO watcher)"
+depends = ["docker:down", "sso-uninstall"]
+
+[tasks."docker:up"]
+description = "Start Docker services (s3proxy + sso-monitor)"
+run = "docker-compose up -d"
+
+[tasks."docker:down"]
+description = "Stop Docker services"
+run = "docker-compose down"
+
+[tasks."docker:logs"]
+description = "View Docker service logs"
+run = "bash scripts/docker-logs.sh"
+
+[tasks."docker:restart"]
+description = "Restart Docker services"
+run = "docker-compose restart"
+
+[tasks.sso-install]
+description = "Install SSO watcher as macOS launchd user agent"
+run = "bash scripts/sso-install.sh"
+
+[tasks.sso-uninstall]
+description = "Uninstall SSO watcher launchd agent"
+run = "bash scripts/sso-uninstall.sh"
+
+[tasks.sso-status]
+description = "Check SSO watcher launchd agent status"
+run = "bash scripts/sso-status.sh"
+
+[tasks.sso-restart]
+description = "Restart SSO watcher launchd agent"
+run = "bash scripts/sso-restart.sh"
+
+[tasks.sso-logs]
+description = "Tail SSO watcher logs"
+run = "bash scripts/sso-logs.sh"
+
+[tasks.sso-test]
+description = "Test SSO watcher with a dummy signal file"
+run = """
+SIGNAL_DIR="$HOME/.aws/sso-renewer"
+SIGNAL_FILE="$SIGNAL_DIR/login-required.json"
+AWS_PROFILE="${AWS_PROFILE:-default}"
+
+echo "Creating test signal file..."
+mkdir -p "$SIGNAL_DIR"
+
+cat > "$SIGNAL_FILE" << EOF
+{
+  "profile": "$AWS_PROFILE",
+  "reason": "Test signal from mise task",
+  "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+}
+EOF
+
+echo "✓ Created signal: $SIGNAL_FILE"
+echo ""
+echo "The watcher should trigger aws sso login within 5 seconds."
+echo "Check logs with: mise run sso-logs"
+echo ""
+echo "To manually trigger login now (without waiting):"
+echo "  ./sso_watcher.py  # Run once in foreground"
+"""
+
+[tasks.sso-clean]
+description = "Clean SSO watcher state and signal files"
+run = """
+STATE_DIR="$HOME/.aws/sso-renewer"
+
+echo "Cleaning SSO watcher state..."
+
+# Remove signal files
+rm -f "$STATE_DIR"/login-required*.json 2>/dev/null || true
+echo "✓ Removed signal files"
+
+# Remove lock directory
+rm -rf "$STATE_DIR/login.lock" 2>/dev/null || true
+echo "✓ Removed lock"
+
+# Optionally remove last-run timestamp (uncomment if needed)
+# rm -f "$STATE_DIR/last-login-at.txt" 2>/dev/null || true
+# echo "✓ Removed last-run timestamp"
+
+echo ""
+echo "State cleaned"
+"""

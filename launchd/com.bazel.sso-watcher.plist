@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Service identification -->
+	<key>Label</key>
+	<string>com.bazel.sso-watcher</string>
+
+	<!-- Program to run -->
+	<key>ProgramArguments</key>
+	<array>
+		<string>{{PYTHON_PATH}}</string>
+		<string>{{REPO_PATH}}/sso-watcher/watcher.py</string>
+	</array>
+
+	<!-- Environment variables -->
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>AWS_PROFILE</key>
+		<string>{{AWS_PROFILE}}</string>
+		<key>SSO_SIGNAL_FILE</key>
+		<string>{{HOME}}/.aws/sso-renewer/login-required.json</string>
+		<key>SSO_STATE_DIR</key>
+		<string>{{HOME}}/.aws/sso-renewer</string>
+		<key>SSO_COOLDOWN_SECONDS</key>
+		<string>{{SSO_COOLDOWN_SECONDS}}</string>
+		<key>SSO_POLL_SECONDS</key>
+		<string>{{SSO_POLL_SECONDS}}</string>
+		<key>PATH</key>
+		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+	</dict>
+
+	<!-- Run in user session (allows browser interaction) -->
+	<key>RunAtLoad</key>
+	<true/>
+
+	<!-- Keep alive - restart if crashes -->
+	<key>KeepAlive</key>
+	<true/>
+
+	<!-- Restart after successful exit -->
+	<key>SuccessfulExit</key>
+	<false/>
+
+	<!-- Throttle restarts to prevent crash loops -->
+	<key>ThrottleInterval</key>
+	<integer>30</integer>
+
+	<!-- Standard output logging -->
+	<key>StandardOutPath</key>
+	<string>{{HOME}}/Library/Logs/sso-watcher.log</string>
+
+	<!-- Standard error logging -->
+	<key>StandardErrorPath</key>
+	<string>{{HOME}}/Library/Logs/sso-watcher.error.log</string>
+
+	<!-- Process type (allows GUI interaction for browser) -->
+	<key>ProcessType</key>
+	<string>Interactive</string>
+
+	<!-- Nice level (0 = normal priority) -->
+	<key>Nice</key>
+	<integer>0</integer>
+</dict>
+</plist>

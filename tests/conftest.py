@@ -134,33 +134,6 @@ def mock_env_vars(temp_aws_dir, monkeypatch):
 
 
 @pytest.fixture
-def mock_s3_bucket():
-    """Create a mock S3 bucket for testing."""
-    from moto import mock_s3
-    import boto3
-
-    with mock_s3():
-        # Create mock S3 bucket
-        conn = boto3.resource("s3", region_name="sa-east-1")
-        bucket = conn.create_bucket(
-            Bucket="test-maven-bucket",
-            CreateBucketConfiguration={"LocationConstraint": "sa-east-1"}
-        )
-
-        # Add some test artifacts
-        test_artifacts = [
-            "com/example/artifact/1.0.0/artifact-1.0.0.jar",
-            "com/example/artifact/1.0.0/artifact-1.0.0.pom",
-            "com/example/other/2.0.0/other-2.0.0.jar",
-        ]
-
-        for artifact_path in test_artifacts:
-            bucket.put_object(Key=artifact_path, Body=b"fake artifact content")
-
-        yield bucket
-
-
-@pytest.fixture
 def sample_maven_artifact():
     """Create a sample Maven artifact for testing."""
     return {

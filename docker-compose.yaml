@@ -10,7 +10,7 @@ services:
       - S3_BUCKET_NAME=${S3_BUCKET_NAME}
       - PROXY_PORT=${PROXY_PORT:-9000}
       - LOG_LEVEL=${LOG_LEVEL:-info}
-      - REFRESH_INTERVAL=${REFRESH_INTERVAL:-300}
+      - REFRESH_INTERVAL=${REFRESH_INTERVAL:-60000}
     ports:
       - "${PROXY_PORT:-9000}:${PROXY_PORT:-9000}"
     volumes:
@@ -24,55 +24,23 @@ services:
       timeout: 10s
       retries: 3
       start_period: 5s
-  
-  credential-monitor:
+
+  sso-monitor:
     build:
-      context: ./credential-monitor
+      context: ./sso-monitor
       dockerfile: Dockerfile
-    container_name: aws-credential-monitor
+    container_name: bazel-sso-monitor
     environment:
       - AWS_PROFILE=${AWS_PROFILE:-default}
-      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - CHECK_INTERVAL=${CHECK_INTERVAL:-60}
+      - SIGNAL_FILE=/signals/login-required.json
     volumes:
-      - ${HOME}/.aws/credentials:/root/.aws/credentials:ro
       - ${HOME}/.aws/config:/root/.aws/config:ro
-      - ./data:/app/data:ro
-      - /var/run/docker.sock:/var/run/docker.sock
+      - ${HOME}/.aws/sso/cache:/root/.aws/sso/cache:ro
+      - ${HOME}/.aws/sso-renewer:/signals
     restart: unless-stopped
     depends_on:
       - s3proxy
-  
-  credential-renewer:
-    build:
-      context: ./credential-renewer
-      dockerfile: Dockerfile
-    container_name: credential-renewer
-    environment:
-      - AWS_PROFILE=${AWS_PROFILE:-default}
-      - CHECK_INTERVAL=${CHECK_INTERVAL:-900}
-      - RENEWAL_THRESHOLD=${RENEWAL_THRESHOLD:-3600}
-      - LOG_LEVEL=${LOG_LEVEL:-info}
-      - LOGIN_NOTIFICATION_FILE=/app/data/login_required.txt
-    volumes:
-      - ${HOME}/.aws/credentials:/root/.aws/credentials:rw
-      - ${HOME}/.aws/config:/root/.aws/config:rw
-      - ${HOME}/.aws/sso/cache:/root/.aws/sso/cache
-      - ./data:/app/data
-    restart: unless-stopped
-
-  # LocalStack for S3 mocking in tests
-  localstack:
-    image: localstack/localstack:latest
-    container_name: localstack-s3
-    ports:
-      - "4566:4566"
-    environment:
-      - SERVICES=s3
-      - DEBUG=${DEBUG:-0}
-    volumes:
-      - ./tests/localstack-init:/etc/localstack/init/ready.d
-    profiles:
-      - test
 
 volumes:
   maven-cache:
