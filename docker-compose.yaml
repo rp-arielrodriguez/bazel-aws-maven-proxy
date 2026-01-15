@@ -52,6 +52,7 @@ services:
       - CHECK_INTERVAL=${CHECK_INTERVAL:-900}
       - RENEWAL_THRESHOLD=${RENEWAL_THRESHOLD:-3600}
       - LOG_LEVEL=${LOG_LEVEL:-info}
+      - LOGIN_NOTIFICATION_FILE=/app/data/login_required.txt
     volumes:
       - ${HOME}/.aws/credentials:/root/.aws/credentials:rw
       - ${HOME}/.aws/config:/root/.aws/config:rw

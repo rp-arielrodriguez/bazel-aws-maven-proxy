@@ -455,15 +455,30 @@ def main():
     logger.info(f"Starting credential renewal service for profile: {AWS_PROFILE}")
     logger.info(f"Checking every {CHECK_INTERVAL} seconds")
     logger.info(f"Renewal threshold: {RENEWAL_THRESHOLD} seconds before expiration")
-    
+
+    last_check_time = 0
+
     while True:
         try:
-            # Check if token needs renewal
-            if check_token_expiration():
-                perform_sso_login()
-            
-            # Sleep until next check
-            time.sleep(CHECK_INTERVAL)
+            current_time = time.time()
+            time_since_last_check = current_time - last_check_time
+
+            # Check if enough time passed OR if we detect system sleep (huge time jump)
+            if last_check_time == 0 or time_since_last_check >= CHECK_INTERVAL:
+                if time_since_last_check > CHECK_INTERVAL * 2:
+                    logger.warning(f"Detected {time_since_last_check:.0f}s gap since last check (system sleep?)")
+
+                # Check if token needs renewal
+                if check_token_expiration():
+                    perform_sso_login()
+                else:
+                    # Token valid - clear any stale notification (user may have logged in manually)
+                    clear_notification_file()
+
+                last_check_time = current_time
+
+            # Short sleep to avoid CPU spinning
+            time.sleep(min(60, CHECK_INTERVAL))
         except Exception as e:
             logger.error(f"Error in renewal cycle: {str(e)}")
             time.sleep(60)  # Sleep for a minute on error
