@@ -111,5 +111,4 @@ mise run sso-install  # Reinstall with new config (idempotent)
 ## See Also
 
 - [SSO_WATCHER.md](SSO_WATCHER.md) - Full documentation
-- [SSO_MONITOR.md](SSO_MONITOR.md) - Manual credential checking
 - [README.md](README.md) - Main project docs

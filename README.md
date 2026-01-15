@@ -143,7 +143,7 @@ mise run sso-restart
 mise run sso-uninstall
 ```
 
-The watcher automatically triggers login when credentials expire. See [SSO_WATCHER.md](SSO_WATCHER.md) for details.
+The watcher automatically triggers login when credentials expire.
 
 ## How It Works
 
