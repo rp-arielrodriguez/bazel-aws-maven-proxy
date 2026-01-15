@@ -1,0 +1,179 @@
+# Example AWS Configuration for SSO Auto-Refresh
+# Location: ~/.aws/config
+#
+# This file shows the complete configuration needed for automatic
+# AWS SSO token refresh to work with bazel-aws-maven-proxy.
+
+# ===================================================================
+# AWS Profile Configuration
+# ===================================================================
+# This section defines your AWS profile with SSO settings.
+# Replace values marked with YOUR_* with your actual values.
+
+[profile bazel-cache]
+# REQUIRED: Reference to the SSO session defined below
+# This tells AWS CLI which SSO session to use for authentication
+sso_session = my-sso
+
+# REQUIRED: Your AWS account ID (12-digit number)
+# Find this in AWS Console under "My Account" or run: aws sts get-caller-identity
+sso_account_id = 123456789012
+
+# REQUIRED: IAM role name to assume in the account
+# This role must have permissions to access your S3 bucket
+# Common roles: DeveloperRole, PowerUserRole, ReadOnlyRole
+sso_role_name = DeveloperRole
+
+# OPTIONAL: Default AWS region for this profile
+# Choose the region where your S3 bucket is located
+region = sa-east-1
+
+# OPTIONAL: Default output format
+# Options: json, yaml, text, table
+output = json
+
+
+# ===================================================================
+# SSO Session Configuration
+# ===================================================================
+# This section defines the SSO session used for authentication.
+# The credential-renewer service uses this to automatically refresh tokens.
+
+[sso-session my-sso]
+# REQUIRED: AWS region where your SSO instance is hosted
+# This is typically where your AWS SSO/Identity Center is configured
+# Find this in AWS Console under AWS IAM Identity Center
+sso_region = sa-east-1
+
+# REQUIRED: Your SSO portal URL
+# Format: https://<your-subdomain>.awsapps.com/start
+# Find this in AWS SSO portal or from your administrator
+sso_start_url = https://my-company-sso.awsapps.com/start
+
+# REQUIRED for auto-refresh: OAuth scopes for token refresh
+# The 'sso:account:access' scope is REQUIRED for automatic token refresh
+# This allows the credential-renewer service to use refresh tokens
+# Without this, you'll need to login manually every time tokens expire
+sso_registration_scopes = sso:account:access
+
+
+# ===================================================================
+# Additional Examples
+# ===================================================================
+
+# Example: Multiple profiles using the same SSO session
+# Useful if you have multiple accounts or roles
+
+[profile bazel-cache-prod]
+sso_session = my-sso
+sso_account_id = 999888777666
+sso_role_name = ReadOnlyRole
+region = us-east-1
+
+[profile bazel-cache-dev]
+sso_session = my-sso
+sso_account_id = 123456789012
+sso_role_name = PowerUserRole
+region = us-west-2
+
+
+# Example: Non-SSO profile (for comparison)
+# This is the traditional static credentials profile
+# Note: Does NOT support auto-refresh
+
+[profile legacy]
+region = us-east-1
+output = json
+# Credentials stored in ~/.aws/credentials file
+
+
+# ===================================================================
+# Setup Instructions
+# ===================================================================
+#
+# 1. Copy this file to ~/.aws/config (backup existing file first!)
+#
+# 2. Replace all YOUR_* placeholders with your actual values:
+#    - YOUR_ACCOUNT_ID: 12-digit AWS account number
+#    - YOUR_ROLE_NAME: IAM role with S3 permissions
+#    - YOUR_SSO_REGION: Region where SSO is configured
+#    - YOUR_SSO_START_URL: Your SSO portal URL
+#
+# 3. Validate configuration:
+#    ./validate_sso_setup.sh bazel-cache
+#
+# 4. Initial login (will open browser for MFA if required):
+#    aws sso login --profile bazel-cache
+#
+# 5. Test access:
+#    aws s3 ls --profile bazel-cache
+#
+# 6. Start bazel-aws-maven-proxy:
+#    docker-compose up -d
+#
+# 7. Monitor auto-refresh:
+#    docker-compose logs -f credential-renewer
+#
+# ===================================================================
+# How Auto-Refresh Works
+# ===================================================================
+#
+# With proper sso-session configuration:
+#
+# 1. You login once: aws sso login --profile bazel-cache
+#    - Opens browser, may require MFA
+#    - Creates access token (expires ~1 hour)
+#    - Creates refresh token (expires ~90 days)
+#
+# 2. credential-renewer monitors token expiration
+#    - Checks every CHECK_INTERVAL seconds (default: 900)
+#
+# 3. When token expires soon:
+#    - Automatically refreshes using SSO-OIDC APIs
+#    - Updates SSO cache with new tokens
+#    - Triggers s3proxy restart
+#    - No user interaction needed!
+#
+# 4. Manual login only needed when refresh token expires
+#    - Approximately every 90 days (depends on SSO config)
+#    - You'll see notification in ./data/login_required.txt
+#
+# Without sso-session (old config):
+# - Must run 'aws sso login' multiple times per day
+# - No automatic refresh possible
+# - Frequent build interruptions
+#
+# ===================================================================
+# Troubleshooting
+# ===================================================================
+#
+# "Profile not found":
+#   - Check profile name matches in docker-compose.yaml
+#   - Verify [profile name] section exists in ~/.aws/config
+#
+# "sso-session not found":
+#   - Check sso_session field in profile matches [sso-session name]
+#   - Verify [sso-session name] section exists
+#
+# "Token refresh failing":
+#   - Check sso_registration_scopes includes 'sso:account:access'
+#   - Run: ./validate_sso_setup.sh
+#   - Check logs: docker-compose logs credential-renewer
+#
+# "Still prompted for login frequently":
+#   - Verify sso_registration_scopes is set correctly
+#   - Check for errors in credential-renewer logs
+#   - Confirm refresh token hasn't expired (check SSO cache)
+#
+# ===================================================================
+# References
+# ===================================================================
+#
+# AWS SSO Configuration:
+# https://docs.aws.amazon.com/cli/latest/userguide/sso-configure-profile-token.html
+#
+# AWS CLI Configuration:
+# https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html
+#
+# SSO-OIDC Token Refresh:
+# https://docs.aws.amazon.com/singlesignon/latest/OIDCAPIReference/Welcome.html

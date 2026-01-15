@@ -17,62 +17,109 @@ This project resolves these issues by providing a transparent layer between Baze
 
 ## Architecture
 
-The system consists of two main components:
+The system consists of three main components:
 
-1. **Credential Monitor Service** - A Node.js application that efficiently detects AWS credential changes using filesystem events and triggers updates when needed.
+1. **Credential Renewer Service** - Monitors SSO token expiration and automatically refreshes tokens using AWS SSO-OIDC APIs before they expire.
 
-2. **S3 Proxy Service** - A service that presents a stable HTTP endpoint to Bazel while handling dynamic authentication with AWS S3 behind the scenes.
+2. **Credential Monitor Service** - Detects AWS credential file changes using filesystem events and triggers proxy updates when needed.
+
+3. **S3 Proxy Service** - Presents a stable HTTP endpoint to Bazel while handling dynamic authentication with AWS S3 behind the scenes.
 
 ```
 ┌─────────────────────────────────────────────┐
 │                  Developer                   │
 └───────────────────┬─────────────────────────┘
                     │
-                    ▼
+                    ▼ (once every ~90 days)
 ┌─────────────────────────────────────────────┐
-│              AWS SSO Login                   │
+│         AWS SSO Login (Manual)               │
 │        $ aws sso login --profile dev         │
 └───────────────────┬─────────────────────────┘
-                    │ writes
+                    │ creates tokens
                     ▼
 ┌─────────────────────────────────────────────┐
-│          ~/.aws/credentials                  │
-│          ~/.aws/sso/cache/*.json            │
-└───────────────────┬─────────────────────────┘
-                    │ monitors
-                    ▼
-┌─────────────────────────────────────────────┐
-│        Credential Monitor Service            │
-│     (Event-based filesystem watcher)         │
-└───────────────────┬─────────────────────────┘
-                    │ triggers restart
-                    ▼
-┌─────────────────────────────────────────────┐
-│            S3 Proxy Service                  │
-│    (Refreshes AWS auth & serves artifacts)   │
+│          ~/.aws/sso/cache/*.json             │
+│     (access token + refresh token)           │
 └───────────────────┬─────────────────────────┘
                     │
-        ┌───────────┴───────────┐
-        │                       │
-        ▼                       ▼
-┌─────────────────┐    ┌─────────────────────┐
-│  Local Cache    │    │    AWS S3 Bucket    │
-│  (Docker Vol)   │    │  (Maven Repository) │
-└─────────────────┘    └─────────────────────┘
-                    ▲
-                    │ requests
-┌─────────────────────────────────────────────┐
-│              Bazel Build                     │
-│      (maven_install configured to use        │
-│       http://localhost:9000)                 │
-└─────────────────────────────────────────────┘
+        ┌───────────┴──────────────┐
+        │                          │
+        ▼ monitors                 ▼ monitors
+┌────────────────────┐    ┌────────────────────┐
+│ Credential Renewer │    │ Credential Monitor │
+│   (Auto-refresh    │    │  (File watcher)    │
+│   via SSO-OIDC)    │    │                    │
+└────────┬───────────┘    └──────────┬─────────┘
+         │ refreshes token           │ detects changes
+         │ (every ~1 hour)           │
+         └───────────┬───────────────┘
+                     │ writes new token
+                     ▼
+         ┌─────────────────────────┐
+         │  ~/.aws/sso/cache/*.json│
+         └───────────┬─────────────┘
+                     │ triggers restart
+                     ▼
+         ┌─────────────────────────┐
+         │    S3 Proxy Service     │
+         │  (Loads new credentials)│
+         └────────┬────────────────┘
+                  │
+      ┌───────────┴───────────┐
+      │                       │
+      ▼                       ▼
+┌──────────────┐    ┌─────────────────────┐
+│ Local Cache  │    │   AWS S3 Bucket     │
+│ (Docker Vol) │    │ (Maven Repository)  │
+└──────────────┘    └─────────────────────┘
+                     ▲
+                     │ requests artifacts
+         ┌───────────────────────┐
+         │    Bazel Build        │
+         │ (http://localhost:9000│
+         └───────────────────────┘
+```
+
+### Token Refresh Flow
+
+```
+Credential Renewer checks token expiration (every 15 min)
+           │
+           ▼ Token expiring within 1 hour?
+    ┌──────┴──────┐
+    │             │
+   YES           NO
+    │             │
+    │             └─> Continue monitoring
+    │
+    ▼ Call refresh_sso_token()
+    │
+    ├─> Read SSO session config from ~/.aws/config
+    ├─> Find/register SSO-OIDC client
+    ├─> Call boto3 create_token() with refresh token
+    │
+    ▼ Success?
+  ┌──┴──┐
+  │     │
+ YES   NO
+  │     │
+  │     └─> Create notification file for manual login
+  │
+  ▼ Write new token to SSO cache
+  │
+  ▼ Credential Monitor detects file change
+  │
+  ▼ S3 Proxy restarts with new credentials
+  │
+  ▼ Builds continue uninterrupted
 ```
 
 ## Features
 
+- **Automatic SSO token refresh**: Refreshes AWS SSO tokens automatically using SSO-OIDC APIs - login once every ~90 days instead of multiple times daily
 - **Zero-configuration AWS authentication**: Works with AWS SSO, IAM roles, environment variables, and static credentials
 - **Real-time credential monitoring**: Uses filesystem events (not polling) for immediate detection of credential changes
-- **Proactive token management**: Detects expiring SSO tokens and refreshes them before they cause build failures
+- **Proactive token management**: Monitors token expiration and refreshes before they expire to prevent build failures
 - **Container-based implementation**: Easy to deploy and integrate with existing workflows
 - **Compatible with all Bazel versions**: No custom Bazel plugins or patching required
 - **Support for modern AWS CLI**: Works with AWS CLI v2, including the latest versions (tested with 2.22.31+)
@@ -80,8 +127,59 @@ The system consists of two main components:
 ## Prerequisites
 
 - Docker and Docker Compose
-- AWS CLI v2 configured with SSO or other authentication method
+- AWS CLI v2 (v2.0+) configured with SSO or other authentication method
 - Bazel-based project with Maven dependencies
+
+## AWS SSO Configuration
+
+For automatic token refresh to work, you need AWS CLI v2 with SSO session support. This allows the system to automatically refresh your AWS credentials without manual intervention.
+
+### Initial Setup
+
+1. **Configure SSO session in `~/.aws/config`:**
+
+```ini
+[profile bazel-cache]
+sso_session = my-sso
+sso_account_id = 123456789012
+sso_role_name = DeveloperRole
+region = sa-east-1
+
+[sso-session my-sso]
+sso_region = sa-east-1
+sso_start_url = https://your-sso-portal.awsapps.com/start
+sso_registration_scopes = sso:account:access
+```
+
+**Critical:** The `sso_registration_scopes = sso:account:access` line is REQUIRED for automatic token refresh to work.
+
+2. **Validate your configuration:**
+
+```bash
+./validate_sso_setup.sh bazel-cache
+```
+
+3. **Initial login:**
+
+```bash
+aws sso login --profile bazel-cache
+```
+
+This opens your browser for authentication (MFA may be required).
+
+### How Auto-Refresh Works
+
+With proper SSO session configuration:
+
+1. **Initial login** (once): You authenticate via browser with MFA
+2. **Automatic refresh** (hourly): The credential-renewer service automatically refreshes tokens using AWS SSO-OIDC APIs
+3. **Manual login** (rarely): Only needed when refresh token expires (~90 days)
+
+**Without SSO session:** You would need to run `aws sso login` multiple times per day when tokens expire.
+
+### Example Configuration
+
+See `examples/aws_config_example` for a complete, annotated configuration file with detailed explanations.
 
 ## Quick Start
 
@@ -169,6 +267,16 @@ A: Verify that your AWS authentication is working with `aws s3 ls s3://your-buck
 
 **Q: Artifacts aren't being found**
 A: Ensure your S3 bucket is correctly configured in `.env` and that the path structure matches what Bazel expects.
+
+**Q: Token refresh failing / Still prompted for login frequently**
+A: Check SSO session configuration:
+- Verify `sso_registration_scopes = sso:account:access` in `~/.aws/config`
+- Run `./validate_sso_setup.sh <profile>` to check configuration
+- Check credential-renewer logs: `docker-compose logs credential-renewer`
+- Ensure SSO session section exists (see AWS SSO Configuration section above)
+
+**Q: "Profile missing sso_session field" error**
+A: Your AWS config uses old SSO format. Update to sso-session format (see `examples/aws_config_example`). Without this, auto-refresh won't work.
 
 ## Testing
 
@@ -291,20 +399,41 @@ ptw -- -m unit
 
 ## How It Works
 
+### AWS SSO Token Auto-Refresh
+
+The credential-renewer service uses AWS SSO-OIDC APIs to automatically refresh your SSO tokens:
+
+1. **Initial Setup**: You login once with `aws sso login --profile bazel-cache`
+   - Creates an access token (expires ~1 hour)
+   - Creates a refresh token (expires ~90 days)
+
+2. **Automatic Refresh**: Every 15 minutes, the service:
+   - Checks token expiration time
+   - If expiring within 1 hour, calls `refresh_sso_token()`
+   - Uses boto3 SSO-OIDC client to get new tokens
+   - Updates SSO cache with refreshed credentials
+   - Credential monitor detects change and restarts s3proxy
+
+3. **Manual Login Only When Needed**: When refresh token expires (~90 days):
+   - Creates notification file: `./data/login_required.txt`
+   - Run `./check_login.sh` or `./login.sh` to re-authenticate
+
+**Result**: Login once every few months instead of multiple times per day.
+
 ### Credential Monitor Service
 
-This service uses the Node.js `chokidar` package to efficiently monitor your AWS credentials files for changes. When it detects that credentials have been updated (e.g., after running `aws sso login`), it triggers the S3 proxy service to refresh its authentication.
+Uses Python watchdog to efficiently monitor AWS credentials files for changes. When it detects updates (from manual login or auto-refresh), triggers S3 proxy restart to load new credentials.
 
 ### S3 Proxy Service
 
-The S3 proxy provides a simple HTTP server that Bazel can use to fetch Maven artifacts. Behind the scenes, it:
+Provides stable HTTP server for Bazel to fetch Maven artifacts:
 
-1. Obtains AWS credentials from your current AWS CLI session
-2. Authenticates to your S3 bucket
-3. Retrieves Maven artifacts and caches them locally
-4. Serves them to Bazel through a stable HTTP endpoint
+1. Obtains AWS credentials from AWS CLI session
+2. Authenticates to S3 bucket
+3. Retrieves Maven artifacts and caches locally
+4. Serves to Bazel through stable endpoint
 
-The proxy is designed to refresh its AWS authentication when triggered by the credential monitor, ensuring continuous access to your S3 bucket even as credentials expire and are refreshed.
+Refreshes authentication when credential monitor detects changes, ensuring continuous access.
 
 ## Security Considerations
 

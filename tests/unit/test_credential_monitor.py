@@ -72,7 +72,7 @@ class TestCredentialEventHandler:
         mock_restart.assert_called_once()
 
     def test_on_modified_triggers_restart_for_sso_cache_file(self, temp_aws_dir):
-        """Test that SSO cache file modification triggers restart."""
+        """Test that SSO cache file modification does NOT trigger restart (s3proxy polls instead)."""
         handler = monitor.CredentialEventHandler()
         sso_cache_dir = temp_aws_dir / "sso" / "cache"
         sso_cache_dir.mkdir(parents=True, exist_ok=True)
@@ -85,7 +85,8 @@ class TestCredentialEventHandler:
             with patch.object(monitor, 'SSO_CACHE_DIR', str(sso_cache_dir)):
                 handler.on_modified(event)
 
-        mock_restart.assert_called_once()
+        # SSO cache changes don't trigger restart - s3proxy polls every REFRESH_INTERVAL
+        mock_restart.assert_not_called()
 
     def test_on_modified_respects_cooldown_period(self, temp_aws_dir):
         """Test that cooldown period prevents multiple restarts."""
@@ -128,7 +129,7 @@ class TestCredentialEventHandler:
                 assert mock_restart.call_count == 2
 
     def test_restart_s3proxy_success(self):
-        """Test successful s3proxy container restart."""
+        """Test successful s3proxy container stop (compose auto-restarts)."""
         handler = monitor.CredentialEventHandler()
 
         with patch('subprocess.run') as mock_run:
@@ -136,7 +137,7 @@ class TestCredentialEventHandler:
             handler._restart_s3proxy()
 
         mock_run.assert_called_once_with(
-            ["docker-compose", "restart", "s3proxy"],
+            ["docker", "stop", "bazel-s3-proxy"],
             check=True
         )
 
@@ -201,7 +202,7 @@ class TestStartMonitoring:
         assert mock_observer.schedule.call_count >= 1
 
     def test_start_monitoring_creates_sso_cache_dir_if_missing(self, temp_aws_dir):
-        """Test that SSO cache directory is created if it doesn't exist."""
+        """Test that monitor skips non-existent parent dirs (doesn't create them)."""
         sso_cache_dir = temp_aws_dir / "sso" / "cache_new"
 
         with patch.object(monitor, 'SSO_CACHE_DIR', str(sso_cache_dir)):
@@ -215,7 +216,8 @@ class TestStartMonitoring:
                     except KeyboardInterrupt:
                         pass
 
-        assert sso_cache_dir.exists()
+        # Monitor doesn't create directories - just skips them with warning
+        assert not sso_cache_dir.exists()
 
     def test_start_monitoring_handles_missing_files_gracefully(self, temp_aws_dir):
         """Test that monitoring works even if some files don't exist."""

@@ -1,26 +1,23 @@
-FROM node:16-alpine
+FROM python:3.11-slim
 
 # Install Docker CLI for service restart capability
-RUN apk add --no-cache docker-cli bash
+RUN apt-get update && apt-get install -y \
+    docker.io \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
 
 WORKDIR /app
 
-# Copy package definitions
-COPY package.json ./
-COPY package-lock.json ./
+# Copy requirements first to leverage Docker cache
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Install dependencies
-RUN npm ci --only=production
-
-# Copy source code
-COPY aws_sso_credential_monitor.js ./
-
-# Run as non-root user for better security
-USER node
+# Copy application code
+COPY monitor.py .
 
 # Set environment variables
-ENV NODE_ENV=production
+ENV PYTHONUNBUFFERED=1
 
-# Start the credential monitor
-CMD ["node", "aws_sso_credential_monitor.js"]
+# Run the monitor script
+CMD ["python", "monitor.py"]
 

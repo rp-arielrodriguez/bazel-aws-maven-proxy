@@ -83,30 +83,32 @@ class TestS3ClientInitialization:
 
     def test_get_s3_client_creates_new_client(self, mock_env_vars):
         """Test creating S3 client for the first time."""
-        with patch('boto3.Session') as mock_session_class:
-            mock_session = MagicMock()
-            mock_session_class.return_value = mock_session
+        # Patch AWS_PROFILE in app module since it was already imported
+        with patch.object(app, 'AWS_PROFILE', 'bazel-cache'):
+            with patch('boto3.Session') as mock_session_class:
+                mock_session = MagicMock()
+                mock_session_class.return_value = mock_session
 
-            mock_creds = MagicMock()
-            mock_creds.access_key = 'fake-access-key'
-            mock_creds.secret_key = 'fake-secret-key'
-            mock_creds.token = 'fake-token'
-            mock_session.get_credentials.return_value = mock_creds
+                mock_creds = MagicMock()
+                mock_creds.access_key = 'fake-access-key'
+                mock_creds.secret_key = 'fake-secret-key'
+                mock_creds.token = 'fake-token'
+                mock_session.get_credentials.return_value = mock_creds
 
-            with patch('boto3.client') as mock_client:
-                mock_s3 = MagicMock()
-                mock_s3.list_buckets.return_value = {'Buckets': []}
-                mock_client.return_value = mock_s3
+                with patch('boto3.client') as mock_client:
+                    mock_s3 = MagicMock()
+                    mock_s3.list_buckets.return_value = {'Buckets': []}
+                    mock_client.return_value = mock_s3
 
-                # Reset global client
-                app.s3_client = None
-                app.last_credentials_check = 0
+                    # Reset global client
+                    app.s3_client = None
+                    app.last_credentials_check = 0
 
-                result = app.get_s3_client()
+                    result = app.get_s3_client()
 
-                assert result == mock_s3
-                mock_session_class.assert_called_once_with(profile_name='bazel-cache')
-                mock_client.assert_called_once()
+                    assert result == mock_s3
+                    mock_session_class.assert_called_once_with(profile_name='bazel-cache')
+                    mock_client.assert_called_once()
 
     def test_get_s3_client_no_credentials(self, mock_env_vars):
         """Test handling missing credentials."""

@@ -315,6 +315,463 @@ class TestMainLoop:
 
 
 @pytest.mark.unit
+class TestGetSSOSessionConfig:
+    """Tests for get_sso_session_config() function."""
+
+    def test_get_sso_session_config_success(self, tmp_path):
+        """Test extracting complete SSO session configuration."""
+        config_file = tmp_path / "config"
+        config_file.write_text("""
+[profile bazel-cache]
+sso_session = my-sso
+sso_account_id = 123456789012
+sso_role_name = DeveloperRole
+
+[sso-session my-sso]
+sso_region = sa-east-1
+sso_start_url = https://my-sso-portal.awsapps.com/start
+sso_registration_scopes = sso:account:access
+""")
+
+        with patch('os.path.expanduser', return_value=str(config_file)):
+            result = renewer.get_sso_session_config('bazel-cache')
+
+        assert result['sso_session'] == 'my-sso'
+        assert result['sso_region'] == 'sa-east-1'
+        assert result['sso_start_url'] == 'https://my-sso-portal.awsapps.com/start'
+        assert result['sso_account_id'] == '123456789012'
+        assert result['sso_role_name'] == 'DeveloperRole'
+        assert 'sso:account:access' in result['sso_registration_scopes']
+
+    def test_get_sso_session_config_missing_profile(self, tmp_path):
+        """Test error when profile not found."""
+        config_file = tmp_path / "config"
+        config_file.write_text("[profile other]\nsso_session = test")
+
+        with patch('os.path.expanduser', return_value=str(config_file)):
+            with pytest.raises(Exception, match="Profile 'nonexistent' not found"):
+                renewer.get_sso_session_config('nonexistent')
+
+    def test_get_sso_session_config_missing_sso_session_field(self, tmp_path):
+        """Test error when profile missing sso_session field."""
+        config_file = tmp_path / "config"
+        config_file.write_text("[profile bazel-cache]\nsso_account_id = 123")
+
+        with patch('os.path.expanduser', return_value=str(config_file)):
+            with pytest.raises(Exception, match="missing 'sso_session' field"):
+                renewer.get_sso_session_config('bazel-cache')
+
+    def test_get_sso_session_config_missing_sso_session_block(self, tmp_path):
+        """Test error when sso-session block not found."""
+        config_file = tmp_path / "config"
+        config_file.write_text("""
+[profile bazel-cache]
+sso_session = my-sso
+""")
+
+        with patch('os.path.expanduser', return_value=str(config_file)):
+            with pytest.raises(Exception, match="SSO session 'my-sso' not found"):
+                renewer.get_sso_session_config('bazel-cache')
+
+
+@pytest.mark.unit
+class TestFindClientRegistration:
+    """Tests for find_client_registration() function."""
+
+    def test_find_client_registration_exists_valid(self, temp_aws_dir):
+        """Test finding valid client registration."""
+        sso_cache_dir = temp_aws_dir / "sso" / "cache"
+        sso_cache_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create registration file
+        import hashlib
+        sso_start_url = "https://my-sso.awsapps.com/start"
+        url_hash = hashlib.sha1(sso_start_url.encode('utf-8')).hexdigest()
+        reg_file = sso_cache_dir / f"botocore-client-id-sa-east-1-{url_hash}.json"
+
+        expires_at = (datetime.now() + timedelta(days=30)).isoformat() + 'Z'
+        reg_file.write_text(json.dumps({
+            "clientId": "test-client-id",
+            "clientSecret": "test-secret",
+            "registrationExpiresAt": expires_at
+        }))
+
+        with patch.object(renewer, 'SSO_CACHE_DIR', str(sso_cache_dir)):
+            result = renewer.find_client_registration('sa-east-1', sso_start_url)
+
+        assert result is not None
+        assert result['clientId'] == 'test-client-id'
+        assert result['clientSecret'] == 'test-secret'
+
+    def test_find_client_registration_not_exists(self, temp_aws_dir):
+        """Test when no registration file exists."""
+        sso_cache_dir = temp_aws_dir / "sso" / "cache"
+        sso_cache_dir.mkdir(parents=True, exist_ok=True)
+
+        with patch.object(renewer, 'SSO_CACHE_DIR', str(sso_cache_dir)):
+            result = renewer.find_client_registration('sa-east-1', 'https://test.com')
+
+        assert result is None
+
+    def test_find_client_registration_expired(self, temp_aws_dir):
+        """Test expired registration returns None."""
+        sso_cache_dir = temp_aws_dir / "sso" / "cache"
+        sso_cache_dir.mkdir(parents=True, exist_ok=True)
+
+        import hashlib
+        sso_start_url = "https://my-sso.awsapps.com/start"
+        url_hash = hashlib.sha1(sso_start_url.encode('utf-8')).hexdigest()
+        reg_file = sso_cache_dir / f"botocore-client-id-sa-east-1-{url_hash}.json"
+
+        # Expired registration
+        expires_at = (datetime.now() - timedelta(days=1)).isoformat() + 'Z'
+        reg_file.write_text(json.dumps({
+            "clientId": "test-client-id",
+            "clientSecret": "test-secret",
+            "registrationExpiresAt": expires_at
+        }))
+
+        with patch.object(renewer, 'SSO_CACHE_DIR', str(sso_cache_dir)):
+            result = renewer.find_client_registration('sa-east-1', sso_start_url)
+
+        assert result is None
+
+    def test_find_client_registration_invalid_json(self, temp_aws_dir):
+        """Test corrupted registration file."""
+        sso_cache_dir = temp_aws_dir / "sso" / "cache"
+        sso_cache_dir.mkdir(parents=True, exist_ok=True)
+
+        import hashlib
+        sso_start_url = "https://my-sso.awsapps.com/start"
+        url_hash = hashlib.sha1(sso_start_url.encode('utf-8')).hexdigest()
+        reg_file = sso_cache_dir / f"botocore-client-id-sa-east-1-{url_hash}.json"
+        reg_file.write_text("invalid json {{{")
+
+        with patch.object(renewer, 'SSO_CACHE_DIR', str(sso_cache_dir)):
+            result = renewer.find_client_registration('sa-east-1', sso_start_url)
+
+        assert result is None
+
+
+@pytest.mark.unit
+class TestRegisterSSOClient:
+    """Tests for register_sso_client() function."""
+
+    def test_register_sso_client_success(self, temp_aws_dir):
+        """Test successful client registration."""
+        sso_cache_dir = temp_aws_dir / "sso" / "cache"
+        sso_cache_dir.mkdir(parents=True, exist_ok=True)
+
+        mock_client = MagicMock()
+        mock_client.register_client.return_value = {
+            'clientId': 'new-client-id',
+            'clientSecret': 'new-secret',
+            'clientIdIssuedAt': 1234567890,
+            'clientSecretExpiresAt': 1234567890 + 7776000  # 90 days
+        }
+
+        with patch('boto3.client', return_value=mock_client):
+            with patch.object(renewer, 'SSO_CACHE_DIR', str(sso_cache_dir)):
+                result = renewer.register_sso_client(
+                    'sa-east-1',
+                    'https://my-sso.awsapps.com/start',
+                    ['sso:account:access']
+                )
+
+        assert result['clientId'] == 'new-client-id'
+        assert result['clientSecret'] == 'new-secret'
+        mock_client.register_client.assert_called_once()
+
+    def test_register_sso_client_api_error(self, temp_aws_dir):
+        """Test AWS API error during registration."""
+        mock_client = MagicMock()
+        from botocore.exceptions import ClientError
+        mock_client.register_client.side_effect = ClientError(
+            {'Error': {'Code': 'AccessDenied', 'Message': 'Access denied'}},
+            'RegisterClient'
+        )
+
+        with patch('boto3.client', return_value=mock_client):
+            with pytest.raises(Exception, match="AWS API error"):
+                renewer.register_sso_client('sa-east-1', 'https://test.com', ['sso:account:access'])
+
+    def test_register_sso_client_network_error(self):
+        """Test network error during registration."""
+        mock_client = MagicMock()
+        mock_client.register_client.side_effect = Exception("Network timeout")
+
+        with patch('boto3.client', return_value=mock_client):
+            with pytest.raises(Exception, match="Network error"):
+                renewer.register_sso_client('sa-east-1', 'https://test.com', ['sso:account:access'])
+
+
+@pytest.mark.unit
+class TestClearNotificationFile:
+    """Tests for clear_notification_file() function."""
+
+    def test_clear_notification_file_exists(self, tmp_path):
+        """Test clearing existing notification file."""
+        notification_file = tmp_path / "login_required.txt"
+        notification_file.write_text("Login required")
+
+        with patch.object(renewer, 'LOGIN_NOTIFICATION_FILE', str(notification_file)):
+            renewer.clear_notification_file()
+
+        assert not notification_file.exists()
+
+    def test_clear_notification_file_not_exists(self, tmp_path):
+        """Test clearing non-existent notification file."""
+        notification_file = tmp_path / "login_required.txt"
+
+        with patch.object(renewer, 'LOGIN_NOTIFICATION_FILE', str(notification_file)):
+            renewer.clear_notification_file()  # Should not raise error
+
+
+@pytest.mark.unit
+class TestRefreshSSOToken:
+    """Tests for refresh_sso_token() function."""
+
+    def test_refresh_sso_token_success(self, temp_aws_dir, tmp_path):
+        """Test complete successful token refresh flow."""
+        sso_cache_dir = temp_aws_dir / "sso" / "cache"
+        sso_cache_dir.mkdir(parents=True, exist_ok=True)
+
+        # Create token file with refresh token
+        token_file = sso_cache_dir / "token.json"
+        expires_at = (datetime.now() + timedelta(minutes=30)).isoformat() + 'Z'
+        token_file.write_text(json.dumps({
+            "accessToken": "old-access-token",
+            "refreshToken": "old-refresh-token",
+            "expiresAt": expires_at
+        }))
+
+        # Mock SSO config
+        config_file = tmp_path / "config"
+        config_file.write_text("""
+[profile default]
+sso_session = my-sso
+
+[sso-session my-sso]
+sso_region = sa-east-1
+sso_start_url = https://my-sso.awsapps.com/start
+sso_registration_scopes = sso:account:access
+""")
+
+        # Mock OIDC client
+        mock_oidc = MagicMock()
+        mock_oidc.create_token.return_value = {
+            'accessToken': 'new-access-token',
+            'refreshToken': 'new-refresh-token',
+            'expiresIn': 3600
+        }
+
+        with patch.object(renewer, 'SSO_CACHE_DIR', str(sso_cache_dir)):
+            with patch('os.path.expanduser', return_value=str(config_file)):
+                with patch('boto3.client', return_value=mock_oidc):
+                    with patch.object(renewer, 'find_client_registration', return_value={
+                        'clientId': 'test-client',
+                        'clientSecret': 'test-secret'
+                    }):
+                        result = renewer.refresh_sso_token()
+
+        assert result is True
+        mock_oidc.create_token.assert_called_once()
+
+        # Verify token file updated
+        updated_token = json.loads(token_file.read_text())
+        assert updated_token['accessToken'] == 'new-access-token'
+        assert updated_token['refreshToken'] == 'new-refresh-token'
+
+    def test_refresh_sso_token_no_refresh_token(self, temp_aws_dir):
+        """Test refresh with missing refreshToken field."""
+        sso_cache_dir = temp_aws_dir / "sso" / "cache"
+        sso_cache_dir.mkdir(parents=True, exist_ok=True)
+
+        token_file = sso_cache_dir / "token.json"
+        token_file.write_text(json.dumps({
+            "accessToken": "access-token",
+            "expiresAt": (datetime.now() + timedelta(minutes=30)).isoformat() + 'Z'
+        }))
+
+        with patch.object(renewer, 'SSO_CACHE_DIR', str(sso_cache_dir)):
+            result = renewer.refresh_sso_token()
+
+        assert result is False
+
+    def test_refresh_sso_token_expired_refresh_token(self, temp_aws_dir, tmp_path):
+        """Test refresh with expired refresh token (InvalidGrantException)."""
+        sso_cache_dir = temp_aws_dir / "sso" / "cache"
+        sso_cache_dir.mkdir(parents=True, exist_ok=True)
+
+        token_file = sso_cache_dir / "token.json"
+        token_file.write_text(json.dumps({
+            "accessToken": "access-token",
+            "refreshToken": "expired-refresh-token",
+            "expiresAt": (datetime.now() + timedelta(minutes=30)).isoformat() + 'Z'
+        }))
+
+        config_file = tmp_path / "config"
+        config_file.write_text("""
+[profile default]
+sso_session = my-sso
+
+[sso-session my-sso]
+sso_region = sa-east-1
+sso_start_url = https://my-sso.awsapps.com/start
+""")
+
+        from botocore.exceptions import ClientError
+        mock_oidc = MagicMock()
+        mock_oidc.create_token.side_effect = ClientError(
+            {'Error': {'Code': 'InvalidGrantException', 'Message': 'Invalid grant'}},
+            'CreateToken'
+        )
+
+        with patch.object(renewer, 'SSO_CACHE_DIR', str(sso_cache_dir)):
+            with patch('os.path.expanduser', return_value=str(config_file)):
+                with patch('boto3.client', return_value=mock_oidc):
+                    with patch.object(renewer, 'find_client_registration', return_value={
+                        'clientId': 'test-client',
+                        'clientSecret': 'test-secret'
+                    }):
+                        result = renewer.refresh_sso_token()
+
+        assert result is False
+
+    def test_refresh_sso_token_network_error(self, temp_aws_dir, tmp_path):
+        """Test refresh with network error."""
+        sso_cache_dir = temp_aws_dir / "sso" / "cache"
+        sso_cache_dir.mkdir(parents=True, exist_ok=True)
+
+        token_file = sso_cache_dir / "token.json"
+        token_file.write_text(json.dumps({
+            "accessToken": "access-token",
+            "refreshToken": "refresh-token",
+            "expiresAt": (datetime.now() + timedelta(minutes=30)).isoformat() + 'Z'
+        }))
+
+        config_file = tmp_path / "config"
+        config_file.write_text("""
+[profile default]
+sso_session = my-sso
+
+[sso-session my-sso]
+sso_region = sa-east-1
+sso_start_url = https://my-sso.awsapps.com/start
+""")
+
+        mock_oidc = MagicMock()
+        mock_oidc.create_token.side_effect = Exception("Network timeout")
+
+        with patch.object(renewer, 'SSO_CACHE_DIR', str(sso_cache_dir)):
+            with patch('os.path.expanduser', return_value=str(config_file)):
+                with patch('boto3.client', return_value=mock_oidc):
+                    with patch.object(renewer, 'find_client_registration', return_value={
+                        'clientId': 'test-client',
+                        'clientSecret': 'test-secret'
+                    }):
+                        result = renewer.refresh_sso_token()
+
+        assert result is False
+
+    def test_refresh_sso_token_no_token_file(self, temp_aws_dir):
+        """Test refresh with no token file."""
+        sso_cache_dir = temp_aws_dir / "sso" / "cache"
+        sso_cache_dir.mkdir(parents=True, exist_ok=True)
+
+        with patch.object(renewer, 'SSO_CACHE_DIR', str(sso_cache_dir)):
+            result = renewer.refresh_sso_token()
+
+        assert result is False
+
+    def test_refresh_sso_token_config_error(self, temp_aws_dir, tmp_path):
+        """Test refresh with config parsing error."""
+        sso_cache_dir = temp_aws_dir / "sso" / "cache"
+        sso_cache_dir.mkdir(parents=True, exist_ok=True)
+
+        token_file = sso_cache_dir / "token.json"
+        token_file.write_text(json.dumps({
+            "accessToken": "access-token",
+            "refreshToken": "refresh-token",
+            "expiresAt": (datetime.now() + timedelta(minutes=30)).isoformat() + 'Z'
+        }))
+
+        config_file = tmp_path / "config"
+        config_file.write_text("[profile other]\ntest=value")
+
+        with patch.object(renewer, 'SSO_CACHE_DIR', str(sso_cache_dir)):
+            with patch('os.path.expanduser', return_value=str(config_file)):
+                result = renewer.refresh_sso_token()
+
+        assert result is False
+
+
+@pytest.mark.unit
+class TestCheckTokenExpirationWithRefresh:
+    """Tests for updated check_token_expiration() with refresh logic."""
+
+    def test_check_expiration_with_successful_refresh(self, temp_aws_dir, tmp_path):
+        """Test token expiring but refresh succeeds, returns False."""
+        sso_cache_dir = temp_aws_dir / "sso" / "cache"
+        sso_cache_dir.mkdir(parents=True, exist_ok=True)
+
+        # Token expiring in 30 minutes (less than 1 hour threshold)
+        token_file = sso_cache_dir / "token.json"
+        expires_at = (datetime.now() + timedelta(minutes=30)).isoformat() + 'Z'
+        token_file.write_text(json.dumps({
+            "accessToken": "access-token",
+            "refreshToken": "refresh-token",
+            "expiresAt": expires_at
+        }))
+
+        with patch.object(renewer, 'SSO_CACHE_DIR', str(sso_cache_dir)):
+            with patch.object(renewer, 'RENEWAL_THRESHOLD', 3600):
+                with patch.object(renewer, 'refresh_sso_token', return_value=True):
+                    result = renewer.check_token_expiration()
+
+        assert result is False
+
+    def test_check_expiration_with_failed_refresh(self, temp_aws_dir):
+        """Test token expiring and refresh fails, returns True."""
+        sso_cache_dir = temp_aws_dir / "sso" / "cache"
+        sso_cache_dir.mkdir(parents=True, exist_ok=True)
+
+        token_file = sso_cache_dir / "token.json"
+        expires_at = (datetime.now() + timedelta(minutes=30)).isoformat() + 'Z'
+        token_file.write_text(json.dumps({
+            "accessToken": "access-token",
+            "expiresAt": expires_at
+        }))
+
+        with patch.object(renewer, 'SSO_CACHE_DIR', str(sso_cache_dir)):
+            with patch.object(renewer, 'RENEWAL_THRESHOLD', 3600):
+                with patch.object(renewer, 'refresh_sso_token', return_value=False):
+                    result = renewer.check_token_expiration()
+
+        assert result is True
+
+    @freeze_time("2026-01-14 12:00:00")
+    def test_check_expiration_token_valid_no_refresh(self, temp_aws_dir):
+        """Test token not expiring, no refresh attempted."""
+        sso_cache_dir = temp_aws_dir / "sso" / "cache"
+        sso_cache_dir.mkdir(parents=True, exist_ok=True)
+
+        token_file = sso_cache_dir / "token.json"
+        # Token expires in 2 hours (7200 seconds > 3600 threshold)
+        expires_at = (datetime.now() + timedelta(hours=2)).isoformat() + 'Z'
+        token_file.write_text(json.dumps({
+            "accessToken": "access-token",
+            "expiresAt": expires_at
+        }))
+
+        with patch.object(renewer, 'SSO_CACHE_DIR', str(sso_cache_dir)):
+            with patch.object(renewer, 'RENEWAL_THRESHOLD', 3600):
+                result = renewer.check_token_expiration()
+
+        assert result is False
+
+
+@pytest.mark.unit
 def test_module_constants():
     """Test that module constants are properly defined."""
     assert hasattr(renewer, 'AWS_PROFILE')

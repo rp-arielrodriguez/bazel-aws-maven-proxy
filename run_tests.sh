@@ -29,7 +29,7 @@ case "$TEST_TYPE" in
         ;;
     "integration")
         echo "Running integration tests (requires Docker)..."
-        pytest -m integration -v
+        pytest -m integration -v --no-cov
         ;;
     "all")
         echo "Running all tests with coverage..."

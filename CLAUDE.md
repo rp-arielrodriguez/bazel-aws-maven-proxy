@@ -80,12 +80,16 @@ The system consists of three containerized services that work together:
 ### 3. Credential Renewer Service (`credential-renewer/`)
 - **Language**: Python
 - **Main file**: `credential-renewer/renewer.py`
-- **Purpose**: Proactive credential expiration monitoring
+- **Purpose**: Proactive credential expiration monitoring AND automatic token refresh
 - **Key functionality**:
   - Checks SSO token expiration every `CHECK_INTERVAL` seconds (default: 900)
-  - Creates notification file when token expires within `RENEWAL_THRESHOLD` seconds (default: 3600)
+  - **Automatically refreshes tokens** using AWS SSO-OIDC APIs when expiring within `RENEWAL_THRESHOLD` (default: 3600)
+  - Uses boto3 `sso-oidc` client: `register_client()` and `create_token()` with refresh token
+  - Reads SSO session config from `~/.aws/config` (requires `sso-session` section)
+  - Updates SSO cache files (`~/.aws/sso/cache/*.json`) with refreshed tokens
+  - Only creates notification file if refresh FAILS (refresh token expired)
   - Notification file location: `/app/data/login_required.txt`
-  - Does NOT automatically refresh (requires manual `aws sso login`)
+  - **Result**: Manual login only needed every ~90 days instead of multiple times daily
 
 ## Data Flow
 
@@ -95,17 +99,29 @@ The system consists of three containerized services that work together:
    - If cache miss, fetches from S3 bucket using current AWS credentials
    - Stores in cache and serves to Bazel
 
-2. **Credential Refresh**:
-   - User runs `aws sso login --profile <profile>`
-   - Credential Monitor detects file changes in `~/.aws/`
+2. **Manual Credential Refresh** (rare - only when refresh token expires):
+   - User runs `aws sso login --profile <profile>` (may require MFA)
+   - Creates new access token (~1 hour lifetime) and refresh token (~90 days)
+   - Credential Monitor detects file changes in `~/.aws/sso/cache/`
    - Monitor triggers S3 Proxy container restart
    - S3 Proxy loads new credentials on startup
    - Builds continue without manual intervention
 
-3. **Proactive Expiration**:
-   - Credential Renewer checks token expiration periodically
-   - When expiration approaching, creates notification file
-   - User runs `./check_login.sh` or `./login.sh` to renew
+3. **Automatic Token Refresh** (normal operation):
+   - Credential Renewer checks token expiration every 15 minutes
+   - When token expiring within 1 hour:
+     1. Calls `get_sso_session_config()` to read SSO session from `~/.aws/config`
+     2. Calls `find_client_registration()` or `register_sso_client()` for SSO-OIDC client
+     3. Calls `refresh_sso_token()` which uses boto3 `sso-oidc.create_token()` with `grant_type=refresh_token`
+     4. Updates SSO cache file with new access token
+     5. Clears any existing notification files
+   - Credential Monitor detects SSO cache file change
+   - Monitor triggers S3 Proxy restart
+   - S3 Proxy loads refreshed credentials
+   - **Builds continue uninterrupted - no user action needed**
+   - If refresh fails (refresh token expired):
+     - Creates notification file: `/app/data/login_required.txt`
+     - User runs `./check_login.sh` or `./login.sh` to re-authenticate
 
 ## Important Implementation Details
 
@@ -126,8 +142,14 @@ The system consists of three containerized services that work together:
 ### Credential Renewer (`credential-renewer/renewer.py`)
 - Finds latest SSO token file in `~/.aws/sso/cache/*.json`
 - Parses `expiresAt` field to determine time until expiration
-- Creates human-readable notification file instead of automatic refresh
-- Notification includes profile-specific SSO configuration
+- **Automatically refreshes tokens** using AWS SSO-OIDC APIs:
+  - `get_sso_session_config(profile)`: Extracts SSO session config from `~/.aws/config`
+  - `find_client_registration()`: Finds cached SSO-OIDC client registration
+  - `register_sso_client()`: Registers new SSO-OIDC client if needed
+  - `refresh_sso_token()`: Main refresh function using boto3 `create_token()` API
+  - `clear_notification_file()`: Removes notification after successful refresh
+- Only creates notification file when automatic refresh fails (refresh token expired)
+- Notification includes profile-specific SSO configuration and login instructions
 
 ## Bazel Integration
 
@@ -157,3 +179,19 @@ maven_install(
 - **AWS credentials**: Verify with `aws s3 ls s3://your-bucket-name/` before starting
 - **Container networking**: Services communicate via Docker Compose network
 - **SSO cache permissions**: credential-renewer needs write access to `~/.aws/sso/cache`
+- **Token refresh failing**:
+  - Check `~/.aws/config` has `sso-session` section (not just old `sso_*` fields in profile)
+  - Verify `sso_registration_scopes = sso:account:access` in sso-session section
+  - Run `./validate_sso_setup.sh <profile>` to validate configuration
+  - Check logs: `docker-compose logs credential-renewer` for specific errors
+- **"Profile missing sso_session field"**: Update AWS config to new sso-session format (see `examples/aws_config_example`)
+- **Still prompted for login frequently**: Auto-refresh not working - check SSO session config and scopes
+
+## Testing
+
+Comprehensive testing documentation available in `TESTING.md`:
+- Unit tests: 50+ tests with 87% coverage
+- Integration tests: Token auto-refresh validation
+- Manual testing procedures for SSO workflows
+- Run tests: `pytest` or `./run_tests.sh`
+- Token refresh tests: `pytest tests/integration/test_token_refresh.py -v`

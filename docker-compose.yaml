@@ -1,4 +1,3 @@
-version: '3.8'
 services:
   s3proxy:
     build:
@@ -15,7 +14,6 @@ services:
     ports:
       - "${PROXY_PORT:-9000}:${PROXY_PORT:-9000}"
     volumes:
-      - ${HOME}/.aws/credentials:/root/.aws/credentials:ro
       - ${HOME}/.aws/config:/root/.aws/config:ro
       - ${HOME}/.aws/sso/cache:/root/.aws/sso/cache:rw
       - maven-cache:/data
@@ -38,7 +36,7 @@ services:
     volumes:
       - ${HOME}/.aws/credentials:/root/.aws/credentials:ro
       - ${HOME}/.aws/config:/root/.aws/config:ro
-      - ${HOME}/.aws/sso/cache:/root/.aws/sso/cache:ro
+      - ./data:/app/data:ro
       - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped
     depends_on:
@@ -48,8 +46,6 @@ services:
     build:
       context: ./credential-renewer
       dockerfile: Dockerfile
-      platforms:
-        - "linux/amd64"
     container_name: credential-renewer
     environment:
       - AWS_PROFILE=${AWS_PROFILE:-default}
@@ -62,7 +58,21 @@ services:
       - ${HOME}/.aws/sso/cache:/root/.aws/sso/cache
       - ./data:/app/data
     restart: unless-stopped
-  
+
+  # LocalStack for S3 mocking in tests
+  localstack:
+    image: localstack/localstack:latest
+    container_name: localstack-s3
+    ports:
+      - "4566:4566"
+    environment:
+      - SERVICES=s3
+      - DEBUG=${DEBUG:-0}
+    volumes:
+      - ./tests/localstack-init:/etc/localstack/init/ready.d
+    profiles:
+      - test
+
 volumes:
   maven-cache:
     name: bazel-aws-maven-proxy_maven-cache
