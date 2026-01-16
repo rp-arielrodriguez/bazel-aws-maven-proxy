@@ -36,7 +36,7 @@ services:
       - SIGNAL_FILE=/signals/login-required.json
     volumes:
       - ${HOME}/.aws/config:/root/.aws/config:ro
-      - ${HOME}/.aws/sso/cache:/root/.aws/sso/cache:ro
+      - ${HOME}/.aws/sso/cache:/root/.aws/sso/cache:rw
       - ${HOME}/.aws/sso-renewer:/signals
     restart: unless-stopped
     depends_on:
