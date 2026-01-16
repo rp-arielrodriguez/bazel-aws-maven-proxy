@@ -46,6 +46,13 @@ See [SSO_WATCHER.md](SSO_WATCHER.md) for details.
 
 ## Quick Start
 
+### Prerequisites
+
+- Docker & Docker Compose
+- AWS CLI
+- Python 3.11+
+- mise (optional but recommended - `brew install mise`)
+
 ### 1. Install dependencies
 
 ```bash
