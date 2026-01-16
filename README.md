@@ -92,13 +92,7 @@ cp .env.example .env
 #   PROXY_PORT=9000
 ```
 
-### 4. Install SSO watcher (macOS - required for auto-login)
-
-```bash
-mise run sso-install
-```
-
-### 5. Start services
+### 4. Start services
 
 **Option A: Start everything with mise (recommended for macOS)**
 ```bash
@@ -110,7 +104,7 @@ mise run start  # Starts Docker services + SSO watcher
 docker-compose up -d  # or: mise run docker:up
 ```
 
-### 6. Configure Bazel
+### 5. Configure Bazel
 
 In your Bazel project:
 
