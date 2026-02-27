@@ -356,10 +356,6 @@ def main() -> int:
                     continue
 
                 try:
-                    now = time.time()
-                    write_last_run(now)
-                    print(f"[sso-watcher] cooldown written at {now:.0f}", flush=True)
-
                     # Read profile from signal file
                     signal = load_signal()
                     profile = str(signal.get("profile") or PROFILE)
@@ -367,6 +363,7 @@ def main() -> int:
                     result = handle_login(profile)
 
                     if result == "success":
+                        write_last_run(time.time())
                         clear_signal()
                         print("[sso-watcher] login successful, signal cleared", flush=True)
                     elif result.startswith("snooze:"):
@@ -374,12 +371,19 @@ def main() -> int:
                         update_signal_snooze(seconds)
                         print(f"[sso-watcher] snoozed, next attempt in {seconds}s", flush=True)
                     elif result == "suppress":
+                        write_last_run(time.time())
                         clear_signal()
                         print("[sso-watcher] reminders suppressed, signal cleared", flush=True)
+                    elif result == "dismiss":
+                        # User saw dialog but dismissed — cooldown to avoid popup spam
+                        write_last_run(time.time())
+                        print("[sso-watcher] dismissed, retry after cooldown", flush=True)
                     elif result == "failed":
-                        print(f"[sso-watcher] login failed (rc=255), keeping signal for retry", flush=True)
+                        # Login failed or timed out — short delay then re-show dialog
+                        print("[sso-watcher] login failed, will retry in 30s", flush=True)
+                        update_signal_snooze(30)
                     else:
-                        print("[sso-watcher] dismissed, keeping signal for retry", flush=True)
+                        print(f"[sso-watcher] unexpected result: {result}", flush=True)
 
                 finally:
                     release_lock()
