@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Detect container engine: podman (preferred) or docker.
+# Source this file to get COMPOSE_CMD variable.
+#
+# Override with: CONTAINER_ENGINE=docker (or podman)
+
+set -euo pipefail
+
+_detect_engine() {
+  if [[ -n "${CONTAINER_ENGINE:-}" ]]; then
+    case "$CONTAINER_ENGINE" in
+      podman) echo "podman" ;;
+      docker) echo "docker" ;;
+      *)
+        echo "Unknown CONTAINER_ENGINE=$CONTAINER_ENGINE (expected: podman, docker)" >&2
+        exit 1
+        ;;
+    esac
+    return
+  fi
+
+  if command -v podman &>/dev/null; then
+    echo "podman"
+  elif command -v docker &>/dev/null; then
+    echo "docker"
+  else
+    echo "No container engine found. Install podman or docker." >&2
+    exit 1
+  fi
+}
+
+ENGINE=$(_detect_engine)
+COMPOSE_CMD="$ENGINE compose"
+
+export ENGINE COMPOSE_CMD

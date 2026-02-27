@@ -9,7 +9,7 @@ See [QUICKSTART_SSO_WATCHER.md](QUICKSTART_SSO_WATCHER.md) for setup instruction
 ## Architecture
 
 ```
-SSO Monitor (Docker) checks credentials
+SSO Monitor (Container) checks credentials
        ↓ detects expiration
 Writes signal → ~/.aws/sso-renewer/login-required.json
        ↓ polls every 5s
@@ -28,7 +28,7 @@ S3 Proxy + Monitor reload (no restart)
 **Problem:** S3 proxy cache is stateful and can't restart. AWS SSO tokens expire hourly. Login requires browser + MFA on host.
 
 **Solution:**
-- Monitor (Docker) detects expiration, writes signal file
+- Monitor (container) detects expiration, writes signal file
 - Watcher (host) reads signal, asks user (notify mode) or triggers login directly (auto mode)
 - Proxy auto-reloads credentials without restart
 
@@ -170,11 +170,11 @@ mise run sso-install
 # Clean state
 mise run sso-clean
 
-# Check monitor is running
-docker-compose ps sso-monitor
+# Check monitor is running (use your engine)
+podman compose ps sso-monitor   # or: docker compose ps sso-monitor
 
 # View monitor logs
-docker-compose logs sso-monitor
+podman compose logs sso-monitor  # or: docker compose logs sso-monitor
 ```
 
 ### Multiple login popups
@@ -195,7 +195,7 @@ docker-compose logs sso-monitor
 
 ## System Integration
 
-Works with Docker-based SSO monitor:
+Works with container-based SSO monitor (Podman or Docker):
 - Monitor detects expired credentials in container
 - Writes signal to shared volume
 - Watcher on host detects signal

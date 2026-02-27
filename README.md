@@ -18,14 +18,14 @@ This project provides a stable HTTP endpoint for Bazel while handling AWS S3 aut
 
 Three-component automated system:
 
-1. **S3 Proxy Service** (Docker) - HTTP server that caches and serves Maven artifacts from S3
-2. **SSO Monitor Service** (Docker) - Continuously checks credentials and writes signal files
+1. **S3 Proxy Service** (Container) - HTTP server that caches and serves Maven artifacts from S3
+2. **SSO Monitor Service** (Container) - Continuously checks credentials and writes signal files
 3. **SSO Watcher** (Host) - Watches for signals, notifies user, and triggers login on confirmation
 
 ### Automated Workflow
 
 ```
-SSO Monitor (Docker) checks credentials every 60s
+SSO Monitor (Container) checks credentials every 60s
        ↓ detects expiration
 Writes signal → ~/.aws/sso-renewer/login-required.json (shared volume)
        ↓ watcher polls every 5s
@@ -49,7 +49,7 @@ See [SSO_WATCHER.md](SSO_WATCHER.md) for details.
 
 ### Prerequisites
 
-- Docker & Docker Compose
+- Podman (preferred) or Docker
 - AWS CLI
 - Python 3.11+
 - mise (optional but recommended - `brew install mise`)
@@ -122,9 +122,9 @@ cp .env.example .env
 mise run start  # Starts Docker services + SSO watcher
 ```
 
-**Option B: Start Docker services only**
+**Option B: Start container services only**
 ```bash
-mise run docker:up  # or: docker-compose up -d
+mise run containers:up  # auto-detects podman or docker
 ```
 
 ### 5. Configure Bazel
@@ -180,7 +180,7 @@ In `notify` mode (default), the watcher shows a dialog with Refresh/Snooze/Don't
 ### S3 Proxy Service
 
 - Flask HTTP server on configurable port (default: 9000)
-- Caches Maven artifacts locally (Docker volume)
+- Caches Maven artifacts locally (container volume)
 - On cache miss, fetches from S3 using AWS credentials
 - Periodically refreshes credentials (every 60 seconds by default)
 - Health check endpoint: `/healthz`
@@ -221,39 +221,40 @@ Environment variables (`.env` file):
 | `SSO_COOLDOWN_SECONDS` | Watcher cooldown between logins | `600` |
 | `SSO_POLL_SECONDS` | Watcher signal file poll interval | `5` |
 | `SSO_LOGIN_MODE` | `notify` (ask user) or `auto` (open browser immediately) | `notify` |
+| `CONTAINER_ENGINE` | `podman` or `docker` (auto-detect if unset) | auto-detect |
 
 ## Commands
 
 ### Complete System (mise)
 
 ```bash
-# Start everything (Docker + SSO watcher)
+# Start everything (containers + SSO watcher)
 mise run start
 
 # Stop everything
 mise run stop
 
-# View all Docker logs
-mise run docker:logs
+# View container logs
+mise run containers:logs
 
 # View SSO watcher logs
 mise run sso-logs
 ```
 
-### Docker Services
+### Container Services
+
+Supports both Podman (preferred) and Docker. Auto-detected, or set `CONTAINER_ENGINE` in `.env`.
 
 ```bash
-# Start Docker services (s3proxy + sso-monitor)
-docker-compose up -d
+# Using mise (recommended, engine-agnostic)
+mise run containers:up
+mise run containers:logs
+mise run containers:down
+mise run containers:restart
 
-# View logs
-docker-compose logs -f
-
-# Stop services
-docker-compose down
-
-# Restart services
-docker-compose restart
+# Or directly with your engine
+podman compose up -d    # Podman
+docker compose up -d    # Docker
 ```
 
 ### SSO Watcher (macOS)
@@ -295,7 +296,7 @@ PROXY_PORT=8888
 Manual login:
 ```bash
 aws sso login --profile bazel-cache
-docker-compose restart s3proxy
+mise run containers:restart  # or: podman compose restart s3proxy
 ```
 
 ### S3 access issues
@@ -317,9 +318,9 @@ Verify configuration:
 mise run sso-status
 ```
 
-Check logs:
+Check container logs:
 ```bash
-docker-compose logs s3proxy
+mise run containers:logs  # or: podman compose logs s3proxy
 ```
 
 ## macOS Support

@@ -28,7 +28,7 @@ case "$TEST_TYPE" in
         pytest -m unit -v
         ;;
     "integration")
-        echo "Running integration tests (requires Docker)..."
+        echo "Running integration tests (requires podman/docker)..."
         pytest -m integration -v --no-cov
         ;;
     "all")
@@ -59,7 +59,7 @@ case "$TEST_TYPE" in
         echo ""
         echo "Options:"
         echo "  unit        - Run unit tests (fast, default)"
-        echo "  integration - Run integration tests (requires Docker)"
+        echo "  integration - Run integration tests (requires podman/docker)"
         echo "  all         - Run all tests with coverage"
         echo "  coverage    - Generate HTML coverage report"
         echo "  watch       - Run tests in watch mode"

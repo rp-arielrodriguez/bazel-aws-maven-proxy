@@ -5,28 +5,28 @@
 python = "3.11"
 
 [tasks.start]
-description = "Start complete system (Docker services + SSO watcher)"
-depends = ["docker:up", "sso-install"]
+description = "Start complete system (containers + SSO watcher)"
+depends = ["containers:up", "sso-install"]
 
 [tasks.stop]
-description = "Stop complete system (Docker services + SSO watcher)"
-depends = ["docker:down", "sso-uninstall"]
+description = "Stop complete system (containers + SSO watcher)"
+depends = ["containers:down", "sso-uninstall"]
 
-[tasks."docker:up"]
-description = "Start Docker services (s3proxy + sso-monitor)"
-run = "docker-compose up -d"
+[tasks."containers:up"]
+description = "Start container services (s3proxy + sso-monitor)"
+run = "source scripts/container-engine.sh && $COMPOSE_CMD up -d"
 
-[tasks."docker:down"]
-description = "Stop Docker services"
-run = "docker-compose down"
+[tasks."containers:down"]
+description = "Stop container services"
+run = "source scripts/container-engine.sh && $COMPOSE_CMD down"
 
-[tasks."docker:logs"]
-description = "View Docker service logs"
+[tasks."containers:logs"]
+description = "View container service logs"
 run = "bash scripts/docker-logs.sh"
 
-[tasks."docker:restart"]
-description = "Restart Docker services"
-run = "docker-compose restart"
+[tasks."containers:restart"]
+description = "Restart container services"
+run = "source scripts/container-engine.sh && $COMPOSE_CMD restart"
 
 [tasks.sso-install]
 description = "Install SSO watcher as macOS launchd user agent"

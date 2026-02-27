@@ -109,10 +109,10 @@ output = json
 #    aws s3 ls --profile bazel-cache
 #
 # 6. Start bazel-aws-maven-proxy:
-#    docker-compose up -d
+#    mise run start  # or: podman compose up -d
 #
 # 7. Monitor credentials:
-#    docker-compose logs -f sso-monitor
+#    mise run containers:logs  # or: podman compose logs sso-monitor
 #
 # ===================================================================
 # How Auto-Refresh Works
@@ -148,7 +148,7 @@ output = json
 # ===================================================================
 #
 # "Profile not found":
-#   - Check profile name matches in docker-compose.yaml
+#   - Check profile name matches in .env
 #   - Verify [profile name] section exists in ~/.aws/config
 #
 # "sso-session not found":
@@ -157,7 +157,7 @@ output = json
 #
 # "Token refresh failing":
 #   - Check sso_registration_scopes includes 'sso:account:access'
-#   - Check logs: docker-compose logs sso-monitor
+#   - Check logs: mise run containers:logs
 #   - Check watcher logs: mise run sso-logs
 #
 # "Still prompted for login frequently":

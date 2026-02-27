@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SSO credential monitor for Docker container.
+SSO credential monitor for container deployment.
 
 Periodically checks if AWS SSO credentials are valid.
 Writes signal file when credentials expire for host-side watcher to pick up.

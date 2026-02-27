@@ -4,29 +4,29 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-This project provides a transparent proxy layer between Bazel builds and S3-hosted Maven repositories with automated AWS SSO authentication support via Docker-based monitoring and host-side watcher integration.
+This project provides a transparent proxy layer between Bazel builds and S3-hosted Maven repositories with automated AWS SSO authentication support via container-based monitoring and host-side watcher integration. Supports Podman (preferred) and Docker.
 
 ## Key Commands
 
 ### Starting and Managing Services
 
 ```bash
-# Start everything (Docker + SSO watcher)
+# Start everything (containers + SSO watcher)
 mise run start
 
 # Stop everything
 mise run stop
 
-# View Docker logs
-mise run docker:logs
+# View container logs
+mise run containers:logs
 
 # View SSO watcher logs
 mise run sso-logs
 
-# Or use docker-compose directly:
-docker-compose up -d      # Start services
-docker-compose logs -f    # View logs
-docker-compose down       # Stop services
+# Or use compose directly (podman preferred, docker also supported):
+podman compose up -d      # Start services
+podman compose logs -f    # View logs
+podman compose down       # Stop services
 ```
 
 ### SSO Watcher Management (macOS)
@@ -61,6 +61,7 @@ Environment variables in `.env` (copy from `.env.example`):
 - `SSO_COOLDOWN_SECONDS`: Watcher cooldown (default: 600)
 - `SSO_POLL_SECONDS`: Watcher poll interval (default: 5)
 - `SSO_LOGIN_MODE`: Login behavior - `notify` (default, asks user) or `auto` (opens browser immediately)
+- `CONTAINER_ENGINE`: `podman` or `docker` (auto-detect if unset, prefers podman)
 
 ## Architecture
 
@@ -75,14 +76,14 @@ Environment variables in `.env` (copy from `.env.example`):
   - Refreshes AWS credentials periodically
   - Health check at `/healthz`
 - **Port**: Configurable via `PROXY_PORT`
-- **Cache**: `/data` (Docker volume)
+- **Cache**: `/data` (container volume)
 
 ### SSO Monitor Service (`sso-monitor/`)
-- **Language**: Python (Docker container)
+- **Language**: Python (container)
 - **Main file**: `sso-monitor/monitor.py`
 - **Purpose**: Continuously monitor credential validity
 - **Key functionality**:
-  - Runs in Docker alongside s3proxy
+  - Runs in container alongside s3proxy
   - Checks credentials every 60 seconds (configurable)
   - Writes signal file to shared volume when expired
   - Uses `boto3 sts.get_caller_identity()` for validation
@@ -109,7 +110,7 @@ Environment variables in `.env` (copy from `.env.example`):
 
 ```
 ┌─────────────────────────────────────┐
-│  SSO Monitor (Docker)               │
+│  SSO Monitor (Container)             │
 │  - Checks credentials every 60s     │
 │  - Detects expiration               │
 └──────────────┬──────────────────────┘
@@ -152,7 +153,7 @@ Environment variables in `.env` (copy from `.env.example`):
 - Handles file serving and directory listings
 
 ### SSO Monitor (`sso-monitor/monitor.py`)
-- Docker daemon that checks credentials periodically
+- Container daemon that checks credentials periodically
 - Primary check: `boto3.client('sts').get_caller_identity()`
 - Writes signal files when credentials expire
 - State-based signaling (only on transitions)
