@@ -1,10 +1,12 @@
 # SSO Watcher Quick Start
 
-5-minute setup for automated AWS SSO login on macOS.
+5-minute setup for AWS SSO credential management on macOS.
 
 ## What This Does
 
-Automatically opens your browser for AWS SSO login when credentials expire. No manual intervention, no container restarts.
+Watches for expired AWS SSO credentials and notifies you with a macOS dialog. Click "Refresh" to open the browser for login, or dismiss to skip. No container restarts needed.
+
+Set `SSO_LOGIN_MODE=auto` in `.env` if you prefer automatic browser login without confirmation.
 
 ## Prerequisites
 
@@ -51,7 +53,8 @@ mise run sso-logs
 # Create a fake signal
 mise run sso-test
 
-# Watcher will trigger login within 5 seconds
+# Watcher will show a dialog within 5 seconds (notify mode)
+# Or open browser immediately (auto mode)
 # Check logs to see it working
 ```
 
@@ -66,10 +69,12 @@ mise run sso-uninstall
 1. S3 proxy detects expired credentials
 2. Writes signal file: `~/.aws/sso-renewer/login-required.json`
 3. Watcher detects signal within 5 seconds
-4. Opens browser: `aws sso login --profile <profile>`
-5. You complete auth in browser
-6. Watcher clears signal
-7. Proxy reloads credentials automatically
+4. **notify mode** (default): shows macOS dialog — click "Refresh" to proceed
+5. **auto mode**: skips dialog, opens browser immediately
+6. Runs `aws sso login --profile <profile>` (opens browser)
+7. You complete auth in browser
+8. Watcher clears signal
+9. Proxy reloads credentials automatically
 
 No container restarts. Cache stays intact.
 
@@ -98,6 +103,7 @@ All config in `.env` file:
 nano .env
 
 # Update settings:
+SSO_LOGIN_MODE=notify      # "notify" (ask user) or "auto" (open browser immediately)
 SSO_COOLDOWN_SECONDS=60    # Cooldown between logins
 SSO_POLL_SECONDS=5         # Poll interval
 AWS_PROFILE=bazel-cache    # AWS profile to use

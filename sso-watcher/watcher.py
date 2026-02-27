@@ -2,8 +2,9 @@
 """
 Host-side AWS SSO watcher for bazel-aws-maven-proxy.
 
-Watches for a signal file indicating login is required, then triggers
-interactive aws sso login on the host (allowing browser interaction).
+Watches for a signal file indicating login is required, then either:
+- Shows a macOS notification asking the user to confirm (notify mode, default)
+- Automatically triggers aws sso login (auto mode)
 
 Safe, boring, production-quality implementation:
 - Atomic directory-based locking (no concurrent logins)
@@ -34,6 +35,9 @@ LOCK_DIR = STATE_DIR / "login.lock"
 LAST_RUN_FILE = STATE_DIR / "last-login-at.txt"
 COOLDOWN_SECONDS = int(os.environ.get("SSO_COOLDOWN_SECONDS", "600"))  # 10 min
 POLL_SECONDS = int(os.environ.get("SSO_POLL_SECONDS", "5"))
+
+# Login mode: "notify" (default) = ask user first, "auto" = open browser immediately
+LOGIN_MODE = os.environ.get("SSO_LOGIN_MODE", "notify")
 
 
 def utc_now() -> datetime:
@@ -117,7 +121,69 @@ def should_trigger_login() -> bool:
     return True
 
 
-def run_aws_sso_login(profile: str = None) -> int:
+def show_notification(profile: str) -> bool:
+    """
+    Show macOS notification asking user to confirm SSO login.
+
+    Uses osascript to display a dialog with Refresh/Dismiss buttons.
+    The dialog has a 120-second timeout to avoid zombie dialogs.
+
+    Args:
+        profile: AWS profile name to show in the notification
+
+    Returns:
+        True if user clicked Refresh, False otherwise
+    """
+    script = (
+        'display dialog '
+        '"AWS SSO credentials expired for profile: {profile}.\\n\\n'
+        'Refresh now? This will open a browser for authentication." '
+        'with title "AWS SSO Login Required" '
+        'buttons {{"Dismiss", "Refresh"}} '
+        'default button "Refresh" '
+        'giving up after 120'
+    ).format(profile=profile)
+
+    try:
+        proc = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=130  # slightly more than dialog timeout
+        )
+
+        output = proc.stdout.strip()
+        normalized = output.replace(" ", "")
+
+        # Dialog timed out (gave up) - always reject regardless of button
+        if "gaveup:true" in normalized:
+            print("[sso-watcher] dialog timed out", flush=True)
+            return False
+
+        # User cancelled/closed the dialog
+        if proc.returncode != 0:
+            print("[sso-watcher] user dismissed dialog", flush=True)
+            return False
+
+        # User clicked Refresh
+        if "Refresh" in output:
+            return True
+
+        return False
+
+    except subprocess.TimeoutExpired:
+        print("[sso-watcher] notification dialog timed out", flush=True)
+        return False
+    except FileNotFoundError:
+        # osascript not available (not macOS)
+        print("[sso-watcher] osascript not found, falling back to auto mode", flush=True)
+        return True
+    except Exception as e:
+        print(f"[sso-watcher] notification error: {e}", flush=True)
+        return False
+
+
+def run_aws_sso_login(profile: str | None = None) -> int:
     """
     Run aws sso login interactively.
 
@@ -153,12 +219,35 @@ def clear_signal() -> None:
         pass
 
 
+def handle_login(profile: str) -> bool:
+    """
+    Handle the login flow based on configured mode.
+
+    In "notify" mode: shows a macOS dialog, only proceeds if user confirms.
+    In "auto" mode: runs aws sso login immediately (legacy behavior).
+
+    Args:
+        profile: AWS profile to login with
+
+    Returns:
+        True if login succeeded, False otherwise
+    """
+    if LOGIN_MODE == "notify":
+        user_accepted = show_notification(profile)
+        if not user_accepted:
+            print("[sso-watcher] login skipped by user", flush=True)
+            return False
+
+    rc = run_aws_sso_login(profile)
+    return rc == 0
+
+
 def main() -> int:
     """Main watch loop."""
     STATE_DIR.mkdir(parents=True, exist_ok=True)
 
     print(f"[sso-watcher] watching {SIGNAL_FILE} (profile={PROFILE})", flush=True)
-    print(f"[sso-watcher] cooldown={COOLDOWN_SECONDS}s, poll={POLL_SECONDS}s", flush=True)
+    print(f"[sso-watcher] mode={LOGIN_MODE}, cooldown={COOLDOWN_SECONDS}s, poll={POLL_SECONDS}s", flush=True)
 
     while True:
         try:
@@ -174,19 +263,16 @@ def main() -> int:
 
                     # Read profile from signal file
                     signal = load_signal()
-                    profile = signal.get("profile", PROFILE)
+                    profile = str(signal.get("profile") or PROFILE)
 
-                    rc = run_aws_sso_login(profile)
+                    success = handle_login(profile)
 
                     # Clear signal only on success; keep it for retry on failure
-                    if rc == 0:
+                    if success:
                         clear_signal()
                         print("[sso-watcher] login successful, signal cleared", flush=True)
                     else:
-                        print(
-                            f"[sso-watcher] login failed (rc={rc}), keeping signal for retry",
-                            flush=True
-                        )
+                        print("[sso-watcher] login not completed, keeping signal for retry", flush=True)
 
                 finally:
                     release_lock()

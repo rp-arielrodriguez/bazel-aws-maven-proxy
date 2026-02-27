@@ -14,11 +14,13 @@ fi
 AWS_PROFILE="${AWS_PROFILE:-default}"
 SSO_COOLDOWN_SECONDS="${SSO_COOLDOWN_SECONDS:-600}"
 SSO_POLL_SECONDS="${SSO_POLL_SECONDS:-5}"
+SSO_LOGIN_MODE="${SSO_LOGIN_MODE:-notify}"
 
 echo "Installing SSO watcher..."
 echo "  Repository: $REPO_PATH"
 echo "  Python: $PYTHON_PATH"
 echo "  AWS Profile: $AWS_PROFILE"
+echo "  Login mode: $SSO_LOGIN_MODE"
 echo "  Cooldown: ${SSO_COOLDOWN_SECONDS}s"
 echo "  Poll interval: ${SSO_POLL_SECONDS}s"
 echo ""
@@ -33,6 +35,7 @@ sed -e "s|{{PYTHON_PATH}}|$PYTHON_PATH|g" \
     -e "s|{{AWS_PROFILE}}|$AWS_PROFILE|g" \
     -e "s|{{SSO_COOLDOWN_SECONDS}}|$SSO_COOLDOWN_SECONDS|g" \
     -e "s|{{SSO_POLL_SECONDS}}|$SSO_POLL_SECONDS|g" \
+    -e "s|{{SSO_LOGIN_MODE}}|$SSO_LOGIN_MODE|g" \
     "$PLIST_TEMPLATE" > "$PLIST_DEST"
 
 echo "✓ Installed plist to: $PLIST_DEST"

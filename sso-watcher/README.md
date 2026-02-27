@@ -1,6 +1,6 @@
 # SSO Watcher
 
-Host-side daemon that watches for credential expiration signals and triggers interactive AWS SSO login.
+Host-side daemon that watches for credential expiration signals and manages AWS SSO login with user confirmation.
 
 ## Components
 
@@ -11,10 +11,11 @@ Host-side daemon that watches for credential expiration signals and triggers int
 
 1. Runs as macOS launchd user agent
 2. Polls `~/.aws/sso-renewer/login-required.json` every 5 seconds
-3. When signal detected, runs `aws sso login --profile <profile>`
-4. Opens browser for user authentication (respects MFA)
-5. Clears signal on successful login
-6. Implements atomic locking and cooldown
+3. **notify mode** (default): shows macOS dialog — user clicks "Refresh" to proceed
+4. **auto mode**: skips dialog, runs login immediately
+5. Runs `aws sso login --profile <profile>` (opens browser, respects MFA)
+6. Clears signal on successful login
+7. Implements atomic locking and cooldown
 
 ## Installation
 
@@ -24,6 +25,7 @@ mise run sso-install
 
 # Configuration in .env
 AWS_PROFILE=bazel-cache
+SSO_LOGIN_MODE=notify      # "notify" (ask user) or "auto" (open browser immediately)
 SSO_COOLDOWN_SECONDS=60
 SSO_POLL_SECONDS=5
 ```

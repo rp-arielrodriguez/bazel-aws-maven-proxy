@@ -26,6 +26,8 @@
 		<string>{{SSO_COOLDOWN_SECONDS}}</string>
 		<key>SSO_POLL_SECONDS</key>
 		<string>{{SSO_POLL_SECONDS}}</string>
+		<key>SSO_LOGIN_MODE</key>
+		<string>{{SSO_LOGIN_MODE}}</string>
 		<key>PATH</key>
 		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
 	</dict>

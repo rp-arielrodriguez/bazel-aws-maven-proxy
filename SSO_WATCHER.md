@@ -1,6 +1,6 @@
 # SSO Watcher
 
-Host-side daemon for automated AWS SSO login on macOS.
+Host-side daemon for AWS SSO credential management on macOS.
 
 ## Quick Start
 
@@ -14,7 +14,8 @@ SSO Monitor (Docker) checks credentials
 Writes signal → ~/.aws/sso-renewer/login-required.json
        ↓ polls every 5s
 SSO Watcher (launchd) detects signal
-       ↓ triggers
+       ↓ notify mode (default): shows dialog, user clicks "Refresh"
+       ↓ auto mode: proceeds immediately
 aws sso login opens browser
        ↓ user completes MFA
 New credentials → ~/.aws/sso/cache/*.json
@@ -28,7 +29,7 @@ S3 Proxy + Monitor reload (no restart)
 
 **Solution:**
 - Monitor (Docker) detects expiration, writes signal file
-- Watcher (host) reads signal, triggers interactive login
+- Watcher (host) reads signal, asks user (notify mode) or triggers login directly (auto mode)
 - Proxy auto-reloads credentials without restart
 
 ## Components
@@ -37,6 +38,8 @@ S3 Proxy + Monitor reload (no restart)
 
 Host daemon (launchd user agent) that:
 - Polls `~/.aws/sso-renewer/login-required.json` every 5s
+- In `notify` mode (default): shows macOS dialog, only proceeds on user confirmation
+- In `auto` mode: runs login immediately (opens browser)
 - Uses atomic directory locking (`mkdir`)
 - Cooldown (default 60s) prevents popup spam
 - Runs `aws sso login --profile <profile>`
@@ -86,6 +89,7 @@ All settings via `.env`:
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `AWS_PROFILE` | AWS CLI profile | `default` |
+| `SSO_LOGIN_MODE` | `notify` (ask user) or `auto` (open browser immediately) | `notify` |
 | `SSO_COOLDOWN_SECONDS` | Cooldown between logins | `60` |
 | `SSO_POLL_SECONDS` | Signal poll interval | `5` |
 
@@ -149,6 +153,7 @@ mise run sso-install
 
 ### Browser not opening
 
+- Check `SSO_LOGIN_MODE` — if `notify`, you must click "Refresh" in the dialog first
 - Check `PATH` in plist includes AWS CLI location
 - Verify profile exists: `aws configure list-profiles`
 - Check cooldown not active: `cat ~/.aws/sso-renewer/last-login-at.txt`
@@ -168,6 +173,7 @@ docker-compose logs sso-monitor
 
 ### Multiple login popups
 
+- Switch to `notify` mode (`SSO_LOGIN_MODE=notify` in `.env`) — browser only opens on user confirmation
 - Increase `SSO_COOLDOWN_SECONDS` in `.env`
 - Run `mise run sso-install` to apply
 - Current cooldown shown in logs: `cooldown=60s`
@@ -186,8 +192,10 @@ docker-compose logs sso-monitor
 Works with Docker-based SSO monitor:
 - Monitor detects expired credentials in container
 - Writes signal to shared volume
-- Watcher on host triggers login
+- Watcher on host detects signal
+- In `notify` mode: shows dialog, user confirms
+- In `auto` mode: triggers login immediately
 - Browser opens for user authentication
 - Both containers reload credentials automatically
 
-No manual intervention. No container restarts.
+No container restarts needed.

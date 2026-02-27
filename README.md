@@ -20,7 +20,7 @@ Three-component automated system:
 
 1. **S3 Proxy Service** (Docker) - HTTP server that caches and serves Maven artifacts from S3
 2. **SSO Monitor Service** (Docker) - Continuously checks credentials and writes signal files
-3. **SSO Watcher** (Host) - Watches for signals and triggers interactive login
+3. **SSO Watcher** (Host) - Watches for signals, notifies user, and triggers login on confirmation
 
 ### Automated Workflow
 
@@ -30,7 +30,8 @@ SSO Monitor (Docker) checks credentials every 60s
 Writes signal → ~/.aws/sso-renewer/login-required.json (shared volume)
        ↓ watcher polls every 5s
 SSO Watcher (launchd on host) detects signal
-       ↓ triggers
+       ↓ notify mode (default): shows dialog, user clicks "Refresh"
+       ↓ auto mode: opens browser immediately
 aws sso login opens browser for auth + MFA
        ↓ user completes
 New credentials → ~/.aws/sso/cache/*.json
@@ -64,10 +65,30 @@ pip install boto3
 pip3 install boto3
 ```
 
-### 2. Configure AWS profile
+### 2. Configure AWS CLI v2 with SSO
 
-Your `~/.aws/config` should have an SSO profile:
+**IMPORTANT:** Requires AWS CLI v2 with SSO session config (not credentials file).
 
+**Option A: Interactive setup (recommended)**
+```bash
+# Create SSO session
+aws configure sso-session
+# SSO session name: my-sso
+# SSO start URL: https://mycompany.awsapps.com/start
+# SSO region: us-west-2
+# SSO registration scopes: sso:account:access
+
+# Create profile pointing to session
+aws configure sso --profile bazel-cache
+# SSO session name: my-sso
+# Account ID: 123456789012
+# Role name: DeveloperRole
+# Region: us-west-2
+```
+
+**Option B: Manual config**
+
+Add to `~/.aws/config`:
 ```ini
 [profile bazel-cache]
 sso_session = my-sso
@@ -80,6 +101,8 @@ sso_start_url = https://mycompany.awsapps.com/start
 sso_region = us-west-2
 sso_registration_scopes = sso:account:access
 ```
+
+Do NOT use `~/.aws/credentials` file - SSO tokens managed by AWS CLI.
 
 ### 3. Set up environment
 
@@ -101,7 +124,7 @@ mise run start  # Starts Docker services + SSO watcher
 
 **Option B: Start Docker services only**
 ```bash
-docker-compose up -d  # or: mise run docker:up
+mise run docker:up  # or: docker-compose up -d
 ```
 
 ### 5. Configure Bazel
@@ -131,7 +154,7 @@ maven_install(
 
 ### Automated Monitoring (macOS)
 
-The SSO watcher runs as a launchd service and automatically triggers browser login when credentials expire:
+The SSO watcher runs as a launchd service. By default (`notify` mode), it shows a macOS dialog when credentials expire — the browser only opens if you click "Refresh". Set `SSO_LOGIN_MODE=auto` in `.env` for automatic browser login.
 
 ```bash
 # Install watcher (runs in background)
@@ -150,7 +173,7 @@ mise run sso-restart
 mise run sso-uninstall
 ```
 
-The watcher automatically triggers login when credentials expire.
+In `notify` mode (default), the watcher asks before opening the browser. In `auto` mode it opens immediately.
 
 ## How It Works
 
@@ -175,6 +198,8 @@ The watcher automatically triggers login when credentials expire.
   - Warns if expiring soon
 
 - **Login trigger**:
+  - In `notify` mode (default): shows macOS dialog, waits for user confirmation
+  - In `auto` mode: proceeds immediately
   - Runs `aws sso login --profile <profile>` subprocess
   - Opens browser for SSO authentication
   - Respects MFA requirements
@@ -195,6 +220,7 @@ Environment variables (`.env` file):
 | `CHECK_INTERVAL` | SSO monitor check interval (seconds) | `60` |
 | `SSO_COOLDOWN_SECONDS` | Watcher cooldown between logins | `600` |
 | `SSO_POLL_SECONDS` | Watcher signal file poll interval | `5` |
+| `SSO_LOGIN_MODE` | `notify` (ask user) or `auto` (open browser immediately) | `notify` |
 
 ## Commands
 
