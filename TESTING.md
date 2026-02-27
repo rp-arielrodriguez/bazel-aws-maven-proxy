@@ -29,14 +29,15 @@ tests/
 │   ├── sample_sso_token_expired.json
 │   └── sample_aws_config.ini
 └── unit/
-    └── test_s3proxy.py      # S3 proxy unit tests (19 tests)
+    ├── test_s3proxy.py      # S3 proxy unit tests (19 tests)
+    └── test_watcher.py      # SSO watcher unit tests (48 tests)
 ```
 
 ## Test Coverage
 
-Current coverage: **79%** (19 passing tests)
+Current: **67 passing tests** (19 s3proxy + 48 watcher)
 
-### S3 Proxy Tests
+### S3 Proxy Tests (`tests/unit/test_s3proxy.py`)
 
 **Cache Operations** (4 tests):
 - File path conversion
@@ -66,6 +67,51 @@ Current coverage: **79%** (19 passing tests)
 - `@with_s3_client` decorator
 - Error handling
 
+### SSO Watcher Tests (`tests/unit/test_watcher.py`)
+
+**Signal File Operations** (6 tests):
+- Load valid/missing/malformed signal files
+- Clear signal files
+- Snooze update with `nextAttemptAfter`
+- Signal with future `nextAttemptAfter` skipped
+
+**Notification Dialog** (7 tests):
+- Refresh action (exit code 0, stdout "refresh")
+- Snooze action with duration parsing
+- Suppress action ("Don't Remind")
+- Dismiss action (dialog closed/timeout)
+- osascript error handling
+
+**Login Flow** (7 tests):
+- Successful login clears signal
+- Failed login returns failure
+- Snooze/suppress/dismiss pass-through from notification
+- Auto mode skips notification dialog
+- Profile from signal file used in `aws sso login`
+
+**Cooldown & Locking** (6 tests):
+- Cooldown skip when recent login
+- Lock acquisition and release
+- Lock cleanup on error
+
+**Last Run Tracking** (3 tests):
+- Write and read timestamps
+- Missing/corrupt file handling
+
+**Main Loop (Notify Mode)** (9 tests):
+- Refresh success clears signal
+- Dismiss keeps signal
+- Login failure keeps signal
+- Snooze writes `nextAttemptAfter` to signal
+- Suppress clears signal
+- Lock released after dismiss/exception
+- Profile fallback to env var
+
+**Configuration** (10 tests):
+- Environment variable parsing (poll interval, cooldown, login mode)
+- Default values
+- Signal/state directory paths
+
 ## Running Tests
 
 ### All tests
@@ -73,9 +119,14 @@ Current coverage: **79%** (19 passing tests)
 pytest
 ```
 
-### Specific test file
+### Watcher tests only
 ```bash
-pytest tests/unit/test_s3proxy.py
+pytest -m unit tests/unit/test_watcher.py -v --no-cov
+```
+
+### S3 proxy tests only
+```bash
+pytest tests/unit/test_s3proxy.py -v
 ```
 
 ### With verbose output
@@ -110,7 +161,7 @@ Available fixtures in `conftest.py`:
 
 ## Adding New Tests
 
-Example test:
+Example s3proxy test:
 
 ```python
 @pytest.mark.unit
@@ -120,6 +171,19 @@ def test_new_feature(flask_app, mock_s3_client):
         response = flask_app.get('/path')
 
     assert response.status_code == 200
+```
+
+Example watcher test:
+
+```python
+@pytest.mark.unit
+def test_signal_handling(tmp_path):
+    """Test description."""
+    signal_file = tmp_path / "login-required.json"
+    signal_file.write_text('{"profile": "test", "reason": "expired"}')
+
+    result = load_signal(str(signal_file))
+    assert result["profile"] == "test"
 ```
 
 ## Test Requirements

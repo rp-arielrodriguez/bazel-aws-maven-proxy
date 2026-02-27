@@ -11,7 +11,7 @@ Host-side daemon that watches for credential expiration signals and manages AWS 
 
 1. Runs as macOS launchd user agent
 2. Polls `~/.aws/sso-renewer/login-required.json` every 5 seconds
-3. **notify mode** (default): shows macOS dialog — user clicks "Refresh" to proceed
+3. **notify mode** (default): shows dialog — Refresh / Snooze / Don't Remind
 4. **auto mode**: skips dialog, runs login immediately
 5. Runs `aws sso login --profile <profile>` (opens browser, respects MFA)
 6. Clears signal on successful login
@@ -26,7 +26,7 @@ mise run sso-install
 # Configuration in .env
 AWS_PROFILE=bazel-cache
 SSO_LOGIN_MODE=notify      # "notify" (ask user) or "auto" (open browser immediately)
-SSO_COOLDOWN_SECONDS=60
+SSO_COOLDOWN_SECONDS=600
 SSO_POLL_SECONDS=5
 ```
 

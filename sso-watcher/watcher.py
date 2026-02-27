@@ -121,66 +121,127 @@ def should_trigger_login() -> bool:
     return True
 
 
-def show_notification(profile: str) -> bool:
-    """
-    Show macOS notification asking user to confirm SSO login.
+# Snooze intervals: label -> seconds
+SNOOZE_OPTIONS = {
+    "15 min": 900,
+    "30 min": 1800,
+    "1 hour": 3600,
+    "4 hours": 14400,
+}
 
-    Uses osascript to display a dialog with Refresh/Dismiss buttons.
-    The dialog has a 120-second timeout to avoid zombie dialogs.
+# AppleScript that handles the entire notification flow in a single process:
+# Main dialog (3 buttons) -> Snooze picker or suppress warning if needed.
+_NOTIFICATION_SCRIPT = '''
+beep
+tell me to activate
+set dialogResult to display dialog ¬
+    "AWS SSO credentials expired for profile: {profile}." & return & return & ¬
+    "Refresh now, snooze, or disable reminders?" ¬
+    with title "AWS SSO Login Required" ¬
+    buttons {{"Don't Remind", "Snooze", "Refresh"}} ¬
+    default button "Refresh" ¬
+    giving up after 120
+set btn to button returned of dialogResult
+set gaveUp to gave up of dialogResult
+if gaveUp then
+    return "dismiss"
+else if btn is "Snooze" then
+    set picked to choose from list ¬
+        {{{snooze_items}}} ¬
+        with title "Snooze" ¬
+        with prompt "Snooze for how long?" ¬
+        default items {{"30 min"}}
+    if picked is false then
+        return "dismiss"
+    else
+        return "snooze:" & (item 1 of picked)
+    end if
+else if btn is "Don't Remind" then
+    display dialog ¬
+        "Reminders will be disabled until a new signal is received." & return & return & ¬
+        "To manually refresh credentials later, run:" & return & return & ¬
+        "    mise run sso-test" & return & ¬
+        "    aws sso login --profile {profile}" ¬
+        with title "Disable SSO Reminders?" ¬
+        with icon caution ¬
+        buttons {{"Cancel", "Disable Reminders"}} ¬
+        default button "Cancel"
+    if button returned of result is "Disable Reminders" then
+        return "suppress"
+    else
+        return "dismiss"
+    end if
+else
+    return "Refresh"
+end if
+'''
+
+
+def show_notification(profile: str) -> str:
+    """
+    Show macOS notification with Refresh/Snooze/Don't Remind options.
+
+    Runs a single osascript process that handles the entire flow:
+    buttons dialog -> snooze picker or suppress warning if needed.
 
     Args:
         profile: AWS profile name to show in the notification
 
     Returns:
-        True if user clicked Refresh, False otherwise
+        Action string:
+        - "refresh"          user wants to login now
+        - "snooze:<seconds>" user wants to snooze for N seconds
+        - "suppress"         user chose don't remind
+        - "dismiss"          user closed/timed out/cancelled
     """
-    script = (
-        'display dialog '
-        '"AWS SSO credentials expired for profile: {profile}.\\n\\n'
-        'Refresh now? This will open a browser for authentication." '
-        'with title "AWS SSO Login Required" '
-        'buttons {{"Dismiss", "Refresh"}} '
-        'default button "Refresh" '
-        'giving up after 120'
-    ).format(profile=profile)
+    snooze_items = ", ".join(f'"{k}"' for k in SNOOZE_OPTIONS)
+    script = _NOTIFICATION_SCRIPT.format(
+        profile=profile,
+        snooze_items=snooze_items,
+    )
 
     try:
         proc = subprocess.run(
             ["osascript", "-e", script],
             capture_output=True,
             text=True,
-            timeout=130  # slightly more than dialog timeout
+            timeout=135,
         )
-
-        output = proc.stdout.strip()
-        normalized = output.replace(" ", "")
-
-        # Dialog timed out (gave up) - always reject regardless of button
-        if "gaveup:true" in normalized:
-            print("[sso-watcher] dialog timed out", flush=True)
-            return False
-
-        # User cancelled/closed the dialog
-        if proc.returncode != 0:
-            print("[sso-watcher] user dismissed dialog", flush=True)
-            return False
-
-        # User clicked Refresh
-        if "Refresh" in output:
-            return True
-
-        return False
-
     except subprocess.TimeoutExpired:
-        print("[sso-watcher] notification dialog timed out", flush=True)
-        return False
+        print("[sso-watcher] dialog timed out (subprocess)", flush=True)
+        return "dismiss"
     except FileNotFoundError:
-        # osascript not available (not macOS)
         print("[sso-watcher] osascript not found, falling back to auto mode", flush=True)
-        return True
+        return "refresh"
     except Exception as e:
         print(f"[sso-watcher] notification error: {e}", flush=True)
-        return False
+        return "dismiss"
+
+    output = proc.stdout.strip()
+
+    # User closed dialog (Escape/Cmd-W) or osascript error
+    if proc.returncode != 0:
+        print("[sso-watcher] user closed dialog", flush=True)
+        return "dismiss"
+
+    # Parse the returned action string
+    if output == "Refresh":
+        return "refresh"
+    elif output.startswith("snooze:"):
+        label = output[len("snooze:"):]
+        seconds = SNOOZE_OPTIONS.get(label)
+        if seconds:
+            print(f"[sso-watcher] snoozed for {label}", flush=True)
+            return f"snooze:{seconds}"
+        return "dismiss"
+    elif output == "suppress":
+        print("[sso-watcher] user suppressed reminders", flush=True)
+        return "suppress"
+    elif output == "dismiss":
+        print("[sso-watcher] dialog timed out", flush=True)
+        return "dismiss"
+
+    return "dismiss"
 
 
 def run_aws_sso_login(profile: str | None = None) -> int:
@@ -219,27 +280,50 @@ def clear_signal() -> None:
         pass
 
 
-def handle_login(profile: str) -> bool:
+def update_signal_snooze(seconds: int) -> None:
+    """Write nextAttemptAfter into existing signal file for snooze."""
+    signal = load_signal()
+    signal["nextAttemptAfter"] = time.time() + seconds
+    try:
+        with SIGNAL_FILE.open("w") as f:
+            json.dump(signal, f)
+    except Exception as e:
+        print(f"[sso-watcher] failed to write snooze: {e}", flush=True)
+
+
+def handle_login(profile: str) -> str:
     """
     Handle the login flow based on configured mode.
 
-    In "notify" mode: shows a macOS dialog, only proceeds if user confirms.
-    In "auto" mode: runs aws sso login immediately (legacy behavior).
+    In "notify" mode: shows dialog with Refresh/Snooze/Don't Remind options.
+    In "auto" mode: runs aws sso login immediately.
 
     Args:
         profile: AWS profile to login with
 
     Returns:
-        True if login succeeded, False otherwise
+        Action result string:
+        - "success"          login completed successfully
+        - "failed"           login command failed
+        - "snooze:<seconds>" user chose to snooze
+        - "suppress"         user chose don't remind
+        - "dismiss"          user dismissed/cancelled
     """
     if LOGIN_MODE == "notify":
-        user_accepted = show_notification(profile)
-        if not user_accepted:
+        action = show_notification(profile)
+
+        if action == "refresh":
+            pass  # fall through to login
+        elif action.startswith("snooze:"):
+            return action
+        elif action == "suppress":
+            return "suppress"
+        else:
             print("[sso-watcher] login skipped by user", flush=True)
-            return False
+            return "dismiss"
 
     rc = run_aws_sso_login(profile)
-    return rc == 0
+    return "success" if rc == 0 else "failed"
 
 
 def main() -> int:
@@ -265,14 +349,22 @@ def main() -> int:
                     signal = load_signal()
                     profile = str(signal.get("profile") or PROFILE)
 
-                    success = handle_login(profile)
+                    result = handle_login(profile)
 
-                    # Clear signal only on success; keep it for retry on failure
-                    if success:
+                    if result == "success":
                         clear_signal()
                         print("[sso-watcher] login successful, signal cleared", flush=True)
+                    elif result.startswith("snooze:"):
+                        seconds = int(result.split(":")[1])
+                        update_signal_snooze(seconds)
+                        print(f"[sso-watcher] snoozed, next attempt in {seconds}s", flush=True)
+                    elif result == "suppress":
+                        clear_signal()
+                        print("[sso-watcher] reminders suppressed, signal cleared", flush=True)
+                    elif result == "failed":
+                        print("[sso-watcher] login failed, keeping signal for retry", flush=True)
                     else:
-                        print("[sso-watcher] login not completed, keeping signal for retry", flush=True)
+                        print("[sso-watcher] dismissed, keeping signal for retry", flush=True)
 
                 finally:
                     release_lock()

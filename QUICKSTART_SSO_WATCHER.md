@@ -4,7 +4,7 @@
 
 ## What This Does
 
-Watches for expired AWS SSO credentials and notifies you with a macOS dialog. Click "Refresh" to open the browser for login, or dismiss to skip. No container restarts needed.
+Watches for expired AWS SSO credentials and shows a macOS dialog with three options: **Refresh** (login now), **Snooze** (15m/30m/1h/4h), or **Don't Remind** (suppress until next signal). No container restarts needed.
 
 Set `SSO_LOGIN_MODE=auto` in `.env` if you prefer automatic browser login without confirmation.
 
@@ -69,7 +69,7 @@ mise run sso-uninstall
 1. S3 proxy detects expired credentials
 2. Writes signal file: `~/.aws/sso-renewer/login-required.json`
 3. Watcher detects signal within 5 seconds
-4. **notify mode** (default): shows macOS dialog — click "Refresh" to proceed
+4. **notify mode** (default): shows dialog — Refresh / Snooze / Don't Remind
 5. **auto mode**: skips dialog, opens browser immediately
 6. Runs `aws sso login --profile <profile>` (opens browser)
 7. You complete auth in browser
@@ -104,7 +104,7 @@ nano .env
 
 # Update settings:
 SSO_LOGIN_MODE=notify      # "notify" (ask user) or "auto" (open browser immediately)
-SSO_COOLDOWN_SECONDS=60    # Cooldown between logins
+SSO_COOLDOWN_SECONDS=600   # Cooldown between logins
 SSO_POLL_SECONDS=5         # Poll interval
 AWS_PROFILE=bazel-cache    # AWS profile to use
 ```

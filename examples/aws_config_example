@@ -37,7 +37,7 @@ output = json
 # SSO Session Configuration
 # ===================================================================
 # This section defines the SSO session used for authentication.
-# The credential-renewer service uses this to automatically refresh tokens.
+# The sso-monitor service uses this to detect expired tokens.
 
 [sso-session my-sso]
 # REQUIRED: AWS region where your SSO instance is hosted
@@ -100,7 +100,7 @@ output = json
 #    - YOUR_SSO_START_URL: Your SSO portal URL
 #
 # 3. Validate configuration:
-#    ./validate_sso_setup.sh bazel-cache
+#    aws sts get-caller-identity --profile bazel-cache
 #
 # 4. Initial login (will open browser for MFA if required):
 #    aws sso login --profile bazel-cache
@@ -111,8 +111,8 @@ output = json
 # 6. Start bazel-aws-maven-proxy:
 #    docker-compose up -d
 #
-# 7. Monitor auto-refresh:
-#    docker-compose logs -f credential-renewer
+# 7. Monitor credentials:
+#    docker-compose logs -f sso-monitor
 #
 # ===================================================================
 # How Auto-Refresh Works
@@ -125,18 +125,18 @@ output = json
 #    - Creates access token (expires ~1 hour)
 #    - Creates refresh token (expires ~90 days)
 #
-# 2. credential-renewer monitors token expiration
-#    - Checks every CHECK_INTERVAL seconds (default: 900)
+# 2. sso-monitor checks credential validity
+#    - Checks every CHECK_INTERVAL seconds (default: 60)
 #
-# 3. When token expires soon:
-#    - Automatically refreshes using SSO-OIDC APIs
-#    - Updates SSO cache with new tokens
-#    - Triggers s3proxy restart
-#    - No user interaction needed!
+# 3. When credentials expire:
+#    - sso-monitor writes signal to ~/.aws/sso-renewer/login-required.json
+#    - sso-watcher detects signal and prompts user (notify mode)
+#    - User completes SSO login in browser
+#    - Both services detect new credentials automatically
 #
 # 4. Manual login only needed when refresh token expires
 #    - Approximately every 90 days (depends on SSO config)
-#    - You'll see notification in ./data/login_required.txt
+#    - sso-watcher will notify you when login is required
 #
 # Without sso-session (old config):
 # - Must run 'aws sso login' multiple times per day
@@ -157,12 +157,12 @@ output = json
 #
 # "Token refresh failing":
 #   - Check sso_registration_scopes includes 'sso:account:access'
-#   - Run: ./validate_sso_setup.sh
-#   - Check logs: docker-compose logs credential-renewer
+#   - Check logs: docker-compose logs sso-monitor
+#   - Check watcher logs: mise run sso-logs
 #
 # "Still prompted for login frequently":
 #   - Verify sso_registration_scopes is set correctly
-#   - Check for errors in credential-renewer logs
+#   - Check for errors in sso-monitor logs
 #   - Confirm refresh token hasn't expired (check SSO cache)
 #
 # ===================================================================

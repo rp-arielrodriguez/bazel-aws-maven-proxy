@@ -72,7 +72,7 @@ echo "The watcher should trigger aws sso login within 5 seconds."
 echo "Check logs with: mise run sso-logs"
 echo ""
 echo "To manually trigger login now (without waiting):"
-echo "  ./sso_watcher.py  # Run once in foreground"
+echo "  python3 sso-watcher/watcher.py  # Run once in foreground"
 """
 
 [tasks.sso-clean]

@@ -30,7 +30,7 @@ SSO Monitor (Docker) checks credentials every 60s
 Writes signal → ~/.aws/sso-renewer/login-required.json (shared volume)
        ↓ watcher polls every 5s
 SSO Watcher (launchd on host) detects signal
-       ↓ notify mode (default): shows dialog, user clicks "Refresh"
+       ↓ notify mode (default): shows dialog (Refresh/Snooze/Don't Remind)
        ↓ auto mode: opens browser immediately
 aws sso login opens browser for auth + MFA
        ↓ user completes
@@ -154,7 +154,7 @@ maven_install(
 
 ### Automated Monitoring (macOS)
 
-The SSO watcher runs as a launchd service. By default (`notify` mode), it shows a macOS dialog when credentials expire — the browser only opens if you click "Refresh". Set `SSO_LOGIN_MODE=auto` in `.env` for automatic browser login.
+The SSO watcher runs as a launchd service. By default (`notify` mode), it shows a macOS dialog with three options: **Refresh** (login now), **Snooze** (pick 15m/30m/1h/4h), or **Don't Remind** (suppress until next signal). Set `SSO_LOGIN_MODE=auto` in `.env` for automatic browser login.
 
 ```bash
 # Install watcher (runs in background)
@@ -173,7 +173,7 @@ mise run sso-restart
 mise run sso-uninstall
 ```
 
-In `notify` mode (default), the watcher asks before opening the browser. In `auto` mode it opens immediately.
+In `notify` mode (default), the watcher shows a dialog with Refresh/Snooze/Don't Remind options. In `auto` mode it opens the browser immediately.
 
 ## How It Works
 
@@ -292,11 +292,6 @@ PROXY_PORT=8888
 
 ### Expired credentials
 
-Run credential check:
-```bash
-./sso_monitor.py
-```
-
 Manual login:
 ```bash
 aws sso login --profile bazel-cache
@@ -350,7 +345,7 @@ pytest
 
 ## License
 
-MIT License - see LICENSE file for details.
+MIT License
 
 ## Contributing
 

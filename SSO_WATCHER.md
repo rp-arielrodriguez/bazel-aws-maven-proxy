@@ -14,7 +14,7 @@ SSO Monitor (Docker) checks credentials
 Writes signal → ~/.aws/sso-renewer/login-required.json
        ↓ polls every 5s
 SSO Watcher (launchd) detects signal
-       ↓ notify mode (default): shows dialog, user clicks "Refresh"
+       ↓ notify mode (default): Refresh/Snooze/Don't Remind
        ↓ auto mode: proceeds immediately
 aws sso login opens browser
        ↓ user completes MFA
@@ -38,10 +38,13 @@ S3 Proxy + Monitor reload (no restart)
 
 Host daemon (launchd user agent) that:
 - Polls `~/.aws/sso-renewer/login-required.json` every 5s
-- In `notify` mode (default): shows macOS dialog, only proceeds on user confirmation
+- In `notify` mode (default): shows macOS dialog with Refresh/Snooze/Don't Remind
+  - **Refresh**: opens browser for SSO login
+  - **Snooze**: pick 15m/30m/1h/4h, writes `nextAttemptAfter` to signal
+  - **Don't Remind**: clears signal after warning (manual `mise run sso-test` needed later)
 - In `auto` mode: runs login immediately (opens browser)
 - Uses atomic directory locking (`mkdir`)
-- Cooldown (default 60s) prevents popup spam
+- Cooldown (default 600s) prevents popup spam
 - Runs `aws sso login --profile <profile>`
 - Clears signal on success, keeps on failure for retry
 
@@ -60,7 +63,8 @@ macOS launchd configuration with:
   "profile": "bazel-cache",
   "reason": "Credentials expired",
   "timestamp": "2025-01-15T18:00:00Z",
-  "source": "sso-monitor-container"
+  "source": "sso-monitor-container",
+  "nextAttemptAfter": 1700000000
 }
 ```
 
@@ -90,7 +94,7 @@ All settings via `.env`:
 |----------|-------------|---------|
 | `AWS_PROFILE` | AWS CLI profile | `default` |
 | `SSO_LOGIN_MODE` | `notify` (ask user) or `auto` (open browser immediately) | `notify` |
-| `SSO_COOLDOWN_SECONDS` | Cooldown between logins | `60` |
+| `SSO_COOLDOWN_SECONDS` | Cooldown between logins | `600` |
 | `SSO_POLL_SECONDS` | Signal poll interval | `5` |
 
 After changing `.env`, run `mise run sso-install` to apply (idempotent).
@@ -122,7 +126,7 @@ Prevents repeated popups if user ignores or login fails repeatedly.
 
 ### State Management
 
-- **Signal file**: Written by monitor, read by watcher
+- **Signal file**: Written by monitor, read/updated by watcher (snooze writes `nextAttemptAfter`)
 - **Lock directory**: Created on login attempt, removed on completion
 - **Cooldown timestamp**: Written on login attempt, checked before next
 
@@ -130,7 +134,9 @@ Shared directory: `~/.aws/sso-renewer/`
 
 ### Error Handling
 
-- **Login failure**: Signal kept, retry on next poll
+- **Login failure**: Signal kept, retry after cooldown
+- **Snooze**: Signal updated with `nextAttemptAfter`, retry after snooze expires
+- **Suppress (Don't Remind)**: Signal cleared, no retry until new signal
 - **Profile not found**: Logs error, keeps signal
 - **Lock conflict**: Skips, tries next poll
 - **Signal parse error**: Logs warning, removes bad signal
@@ -153,7 +159,7 @@ mise run sso-install
 
 ### Browser not opening
 
-- Check `SSO_LOGIN_MODE` — if `notify`, you must click "Refresh" in the dialog first
+- Check `SSO_LOGIN_MODE` — if `notify`, you must click "Refresh" in the dialog
 - Check `PATH` in plist includes AWS CLI location
 - Verify profile exists: `aws configure list-profiles`
 - Check cooldown not active: `cat ~/.aws/sso-renewer/last-login-at.txt`
@@ -176,7 +182,7 @@ docker-compose logs sso-monitor
 - Switch to `notify` mode (`SSO_LOGIN_MODE=notify` in `.env`) — browser only opens on user confirmation
 - Increase `SSO_COOLDOWN_SECONDS` in `.env`
 - Run `mise run sso-install` to apply
-- Current cooldown shown in logs: `cooldown=60s`
+- Current cooldown shown in logs: `cooldown=600s`
 
 ## Security
 

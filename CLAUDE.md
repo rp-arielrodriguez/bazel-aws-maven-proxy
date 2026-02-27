@@ -58,7 +58,7 @@ Environment variables in `.env` (copy from `.env.example`):
 - `REFRESH_INTERVAL`: Proxy credential refresh in ms (default: 60000)
 - `LOG_LEVEL`: Logging level (debug, info, warn, error)
 - `CHECK_INTERVAL`: Monitor check interval in seconds (default: 60)
-- `SSO_COOLDOWN_SECONDS`: Watcher cooldown (default: 60)
+- `SSO_COOLDOWN_SECONDS`: Watcher cooldown (default: 600)
 - `SSO_POLL_SECONDS`: Watcher poll interval (default: 5)
 - `SSO_LOGIN_MODE`: Login behavior - `notify` (default, asks user) or `auto` (opens browser immediately)
 
@@ -93,10 +93,13 @@ Environment variables in `.env` (copy from `.env.example`):
 - **Purpose**: Detect signals and trigger login on host
 - **Key functionality**:
   - Watches `~/.aws/sso-renewer/` for signal files
-  - In `notify` mode (default): shows macOS dialog asking user to confirm before login
+  - In `notify` mode (default): shows macOS dialog with 3 options:
+    - **Refresh**: runs `aws sso login` (opens browser)
+    - **Snooze**: pick 15m/30m/1h/4h, writes `nextAttemptAfter` to signal file
+    - **Don't Remind**: shows warning, clears signal (manual `mise run sso-test` needed later)
   - In `auto` mode: triggers `aws sso login` immediately (opens browser)
   - Clears signal on success
-  - Atomic locking, cooldown protection
+  - Atomic locking, cooldown protection (default 600s)
 - **Installation**: `mise run sso-install`
 
 
@@ -118,10 +121,10 @@ Environment variables in `.env` (copy from `.env.example`):
 ┌─────────────────────────────────────┐
 │  SSO Watcher (launchd on host)      │
 │  - Detects signal file              │
-│  - notify mode: shows dialog        │
+│  - notify: Refresh/Snooze/Don't Remind │
 │  - auto mode: triggers immediately  │
 └──────────────┬──────────────────────┘
-               │ user confirms / auto
+               │ user clicks Refresh / auto
                ▼
          aws sso login
                │ opens browser
