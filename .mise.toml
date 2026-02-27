@@ -51,6 +51,8 @@ run = "bash scripts/sso-logs.sh"
 [tasks.sso-test]
 description = "Test SSO watcher with a dummy signal file"
 run = """
+# Load .env to get correct AWS_PROFILE
+if [ -f .env ]; then source .env; fi
 SIGNAL_DIR="$HOME/.aws/sso-renewer"
 SIGNAL_FILE="$SIGNAL_DIR/login-required.json"
 AWS_PROFILE="${AWS_PROFILE:-default}"

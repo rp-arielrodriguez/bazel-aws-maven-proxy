@@ -118,6 +118,7 @@ def should_trigger_login() -> bool:
     if isinstance(next_attempt, (int, float)) and time.time() < float(next_attempt):
         return False
 
+    print(f"[sso-watcher] signal detected, triggering login", flush=True)
     return True
 
 
@@ -133,6 +134,8 @@ SNOOZE_OPTIONS = {
 # Main dialog (3 buttons) -> Snooze picker or suppress warning if needed.
 _NOTIFICATION_SCRIPT = '''
 beep
+beep
+tell application "System Events" to set frontmost of process "osascript" to true
 tell me to activate
 set dialogResult to display dialog ¬
     "AWS SSO credentials expired for profile: {profile}." & return & return & ¬
@@ -244,32 +247,40 @@ def show_notification(profile: str) -> str:
     return "dismiss"
 
 
+SSO_LOGIN_TIMEOUT = int(os.environ.get("SSO_LOGIN_TIMEOUT", "120"))  # seconds
+
+
 def run_aws_sso_login(profile: str | None = None) -> int:
     """
-    Run aws sso login interactively.
+    Run aws sso login with a timeout.
 
-    AWS CLI will open the browser when needed.
-    This works fine under macOS user launchd agents.
+    AWS CLI will open the browser when needed. If the user doesn't
+    complete auth within SSO_LOGIN_TIMEOUT seconds (default 120),
+    the process is killed so the watcher can retry later.
 
     Args:
         profile: AWS profile to use (defaults to PROFILE env var)
 
     Returns:
-        Exit code from aws command
+        Exit code from aws command (or -1 on timeout)
     """
     profile = profile or PROFILE
     cmd = ["aws", "sso", "login", "--profile", profile]
-    print(f"[sso-watcher] running: {' '.join(cmd)}", flush=True)
+    print(f"[sso-watcher] running: {' '.join(cmd)} (timeout={SSO_LOGIN_TIMEOUT}s)", flush=True)
 
-    proc = subprocess.run(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True
-    )
-
-    print(proc.stdout, flush=True)
-    return proc.returncode
+    try:
+        proc = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=SSO_LOGIN_TIMEOUT,
+        )
+        print(proc.stdout, flush=True)
+        return proc.returncode
+    except subprocess.TimeoutExpired:
+        print(f"[sso-watcher] aws sso login timed out after {SSO_LOGIN_TIMEOUT}s", flush=True)
+        return -1
 
 
 def clear_signal() -> None:
@@ -310,7 +321,9 @@ def handle_login(profile: str) -> str:
         - "dismiss"          user dismissed/cancelled
     """
     if LOGIN_MODE == "notify":
+        print(f"[sso-watcher] showing notification dialog for {profile}", flush=True)
         action = show_notification(profile)
+        print(f"[sso-watcher] dialog result: {action}", flush=True)
 
         if action == "refresh":
             pass  # fall through to login
@@ -343,7 +356,9 @@ def main() -> int:
                     continue
 
                 try:
-                    write_last_run(time.time())
+                    now = time.time()
+                    write_last_run(now)
+                    print(f"[sso-watcher] cooldown written at {now:.0f}", flush=True)
 
                     # Read profile from signal file
                     signal = load_signal()
@@ -362,7 +377,7 @@ def main() -> int:
                         clear_signal()
                         print("[sso-watcher] reminders suppressed, signal cleared", flush=True)
                     elif result == "failed":
-                        print("[sso-watcher] login failed, keeping signal for retry", flush=True)
+                        print(f"[sso-watcher] login failed (rc=255), keeping signal for retry", flush=True)
                     else:
                         print("[sso-watcher] dismissed, keeping signal for retry", flush=True)
 
