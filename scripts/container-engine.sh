@@ -30,6 +30,27 @@ _detect_engine() {
 }
 
 ENGINE=$(_detect_engine)
-COMPOSE_CMD="$ENGINE compose"
+
+# Determine compose command:
+#   podman  → podman compose
+#   docker  → docker compose (plugin) or docker-compose (standalone)
+_detect_compose() {
+  if [[ "$ENGINE" == "podman" ]]; then
+    echo "podman compose"
+    return
+  fi
+
+  # Docker: prefer plugin, fall back to standalone
+  if docker compose version &>/dev/null; then
+    echo "docker compose"
+  elif command -v docker-compose &>/dev/null; then
+    echo "docker-compose"
+  else
+    echo "No compose command found. Install 'docker compose' plugin or 'docker-compose'." >&2
+    exit 1
+  fi
+}
+
+COMPOSE_CMD=$(_detect_compose)
 
 export ENGINE COMPOSE_CMD

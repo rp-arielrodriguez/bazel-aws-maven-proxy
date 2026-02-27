@@ -7,5 +7,5 @@ source "$SCRIPT_DIR/container-engine.sh"
 trap 'exit 0' INT TERM
 
 # Follow compose logs
-$COMPOSE_CMD logs -f &
+eval "$COMPOSE_CMD logs -f" &
 wait $!

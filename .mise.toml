@@ -14,11 +14,11 @@ depends = ["containers:down", "sso-uninstall"]
 
 [tasks."containers:up"]
 description = "Start container services (s3proxy + sso-monitor)"
-run = "source scripts/container-engine.sh && $COMPOSE_CMD up -d"
+run = "source scripts/container-engine.sh && eval $COMPOSE_CMD up -d"
 
 [tasks."containers:down"]
 description = "Stop container services"
-run = "source scripts/container-engine.sh && $COMPOSE_CMD down"
+run = "source scripts/container-engine.sh && eval $COMPOSE_CMD down"
 
 [tasks."containers:logs"]
 description = "View container service logs"
@@ -26,7 +26,7 @@ run = "bash scripts/docker-logs.sh"
 
 [tasks."containers:restart"]
 description = "Restart container services"
-run = "source scripts/container-engine.sh && $COMPOSE_CMD restart"
+run = "source scripts/container-engine.sh && eval $COMPOSE_CMD restart"
 
 [tasks.sso-install]
 description = "Install SSO watcher as macOS launchd user agent"
