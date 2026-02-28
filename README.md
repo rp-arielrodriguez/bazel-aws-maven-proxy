@@ -154,7 +154,12 @@ maven_install(
 
 ### Automated Monitoring (macOS)
 
-The SSO watcher runs as a launchd service. By default (`notify` mode), it shows a macOS dialog with three options: **Refresh** (login now), **Snooze** (pick 15m/30m/1h/4h), or **Don't Remind** (suppress until next signal). Set `SSO_LOGIN_MODE=auto` in `.env` for automatic browser login.
+The SSO watcher runs as a launchd service with three modes:
+- **notify** (default): shows macOS dialog with Refresh/Snooze/Don't Remind
+- **auto**: opens browser immediately when credentials expire
+- **standalone**: watcher idle, manual `mise run sso-login` only
+
+Switch modes at runtime with `mise run sso-mode:notify|auto|standalone` — takes effect within seconds, no restart needed.
 
 ```bash
 # Install watcher (runs in background)
@@ -220,7 +225,7 @@ Environment variables (`.env` file):
 | `CHECK_INTERVAL` | SSO monitor check interval (seconds) | `60` |
 | `SSO_COOLDOWN_SECONDS` | Watcher cooldown between logins | `600` |
 | `SSO_POLL_SECONDS` | Watcher signal file poll interval | `5` |
-| `SSO_LOGIN_MODE` | `notify` (ask user) or `auto` (open browser immediately) | `notify` |
+| `SSO_LOGIN_MODE` | `notify`, `auto`, or `standalone` (toggleable via `mise run sso-mode:*`) | `notify` |
 | `CONTAINER_ENGINE` | `podman` or `docker` (auto-detect if unset) | auto-detect |
 
 ## Commands
@@ -261,8 +266,12 @@ docker compose up -d    # Docker
 
 ```bash
 mise run sso-install     # Install watcher
-mise run sso-login       # Trigger login dialog manually
-mise run sso-status      # Check status
+mise run sso-login       # Trigger login manually
+mise run sso-mode        # Show current mode
+mise run sso-mode:notify # Switch to notify (dialog)
+mise run sso-mode:auto   # Switch to auto (browser immediately)
+mise run sso-mode:standalone  # Switch to standalone (manual only)
+mise run sso-status      # Check launchd status
 mise run sso-logs        # View logs
 mise run sso-restart     # Restart watcher
 mise run sso-clean       # Clear state/signals

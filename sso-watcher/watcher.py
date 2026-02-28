@@ -5,13 +5,16 @@ Host-side AWS SSO watcher for bazel-aws-maven-proxy.
 Watches for a signal file indicating login is required, then either:
 - Shows a macOS notification asking the user to confirm (notify mode, default)
 - Automatically triggers aws sso login (auto mode)
+- Does nothing, manual login only (standalone mode)
 
-Safe, boring, production-quality implementation:
-- Atomic directory-based locking (no concurrent logins)
-- Cooldown via last-run timestamp (no popup spam)
-- Keeps signal on failure for retry
-- Environment variable configuration
-- Designed for launchd integration
+Modes:
+- notify (default): dialog with Refresh/Snooze/Don't Remind
+- auto: opens browser immediately on signal
+- standalone: watcher idles, user must run `mise run sso-login` manually
+
+Mode is read from state file (~/.aws/sso-renewer/mode) first, then
+SSO_LOGIN_MODE env var, then defaults to "notify". Toggle at runtime
+with `mise run sso-mode:notify`, `sso-mode:auto`, `sso-mode:standalone`.
 """
 import json
 import os
@@ -20,6 +23,8 @@ import sys
 import time
 from pathlib import Path
 from datetime import datetime, timezone
+
+VALID_MODES = ("notify", "auto", "standalone")
 
 # ---- Configuration (override via environment) ----
 PROFILE = os.environ.get("AWS_PROFILE", "default")
@@ -33,11 +38,31 @@ STATE_DIR = Path(os.environ.get(
 ))
 LOCK_DIR = STATE_DIR / "login.lock"
 LAST_RUN_FILE = STATE_DIR / "last-login-at.txt"
+MODE_FILE = STATE_DIR / "mode"
 COOLDOWN_SECONDS = int(os.environ.get("SSO_COOLDOWN_SECONDS", "600"))  # 10 min
 POLL_SECONDS = int(os.environ.get("SSO_POLL_SECONDS", "5"))
 
-# Login mode: "notify" (default) = ask user first, "auto" = open browser immediately
-LOGIN_MODE = os.environ.get("SSO_LOGIN_MODE", "notify")
+# Login mode: state file > env var > default
+_ENV_MODE = os.environ.get("SSO_LOGIN_MODE", "notify")
+
+
+def read_mode() -> str:
+    """Read current mode. Priority: state file > env var > default."""
+    try:
+        mode = MODE_FILE.read_text().strip()
+        if mode in VALID_MODES:
+            return mode
+    except Exception:
+        pass
+    return _ENV_MODE if _ENV_MODE in VALID_MODES else "notify"
+
+
+def write_mode(mode: str) -> None:
+    """Write mode to state file."""
+    if mode not in VALID_MODES:
+        raise ValueError(f"Invalid mode: {mode} (expected: {', '.join(VALID_MODES)})")
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    MODE_FILE.write_text(f"{mode}\n")
 
 
 def utc_now() -> datetime:
@@ -320,7 +345,13 @@ def handle_login(profile: str) -> str:
         - "suppress"         user chose don't remind
         - "dismiss"          user dismissed/cancelled
     """
-    if LOGIN_MODE == "notify":
+    mode = read_mode()
+
+    if mode == "standalone":
+        # Should not reach here, but guard anyway
+        return "dismiss"
+
+    if mode == "notify":
         print(f"[sso-watcher] showing notification dialog for {profile}", flush=True)
         action = show_notification(profile)
         print(f"[sso-watcher] dialog result: {action}", flush=True)
@@ -344,10 +375,17 @@ def main() -> int:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
 
     print(f"[sso-watcher] watching {SIGNAL_FILE} (profile={PROFILE})", flush=True)
-    print(f"[sso-watcher] mode={LOGIN_MODE}, cooldown={COOLDOWN_SECONDS}s, poll={POLL_SECONDS}s", flush=True)
+    print(f"[sso-watcher] mode={read_mode()}, cooldown={COOLDOWN_SECONDS}s, poll={POLL_SECONDS}s", flush=True)
 
     while True:
         try:
+            # Re-read mode each loop so toggles take effect immediately
+            current_mode = read_mode()
+
+            if current_mode == "standalone":
+                time.sleep(POLL_SECONDS)
+                continue
+
             if should_trigger_login():
                 if not try_acquire_lock():
                     # Another watcher instance is handling it

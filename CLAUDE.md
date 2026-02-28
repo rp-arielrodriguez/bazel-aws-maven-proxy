@@ -60,7 +60,7 @@ Environment variables in `.env` (copy from `.env.example`):
 - `CHECK_INTERVAL`: Monitor check interval in seconds (default: 60)
 - `SSO_COOLDOWN_SECONDS`: Watcher cooldown (default: 600)
 - `SSO_POLL_SECONDS`: Watcher poll interval (default: 5)
-- `SSO_LOGIN_MODE`: Login behavior - `notify` (default, asks user) or `auto` (opens browser immediately)
+- `SSO_LOGIN_MODE`: Login behavior - `notify` (default, dialog), `auto` (browser immediately), `standalone` (manual only). Toggleable at runtime via `mise run sso-mode:*`
 - `CONTAINER_ENGINE`: `podman` or `docker` (auto-detect if unset, prefers podman)
 
 ## Architecture
@@ -99,6 +99,7 @@ Environment variables in `.env` (copy from `.env.example`):
     - **Snooze**: pick 15m/30m/1h/4h, writes `nextAttemptAfter` to signal file
     - **Don't Remind**: shows warning, clears signal (manual `mise run sso-login` needed later)
   - In `auto` mode: triggers `aws sso login` immediately (opens browser)
+  - In `standalone` mode: watcher idles, manual `mise run sso-login` only
   - Clears signal on success
   - Atomic locking, cooldown protection (default 600s)
 - **Installation**: `mise run sso-install`

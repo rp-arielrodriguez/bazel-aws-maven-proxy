@@ -43,6 +43,7 @@ Host daemon (launchd user agent) that:
   - **Snooze**: pick 15m/30m/1h/4h, writes `nextAttemptAfter` to signal
   - **Don't Remind**: clears signal after warning (manual `mise run sso-login` needed later)
 - In `auto` mode: runs login immediately (opens browser)
+- In `standalone` mode: watcher idles, manual `mise run sso-login` only
 - Uses atomic directory locking (`mkdir`)
 - Cooldown (default 600s) prevents popup spam
 - Runs `aws sso login --profile <profile>`

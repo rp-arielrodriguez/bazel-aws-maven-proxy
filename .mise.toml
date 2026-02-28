@@ -75,6 +75,51 @@ echo "✓ Signal created, watcher will show login dialog within 5 seconds."
 echo "  Check logs: mise run sso-logs"
 """
 
+[tasks.sso-mode]
+description = "Show current SSO watcher mode"
+run = """
+MODE_FILE="$HOME/.aws/sso-renewer/mode"
+if [ -f "$MODE_FILE" ]; then
+  MODE=$(cat "$MODE_FILE" | tr -d '[:space:]')
+  echo "Current mode: $MODE (from state file)"
+else
+  if [ -f .env ]; then source .env; fi
+  MODE="${SSO_LOGIN_MODE:-notify}"
+  echo "Current mode: $MODE (from env/default, no state file)"
+fi
+echo ""
+echo "Available modes:"
+echo "  notify     - Show dialog before login (default)"
+echo "  auto       - Open browser immediately"
+echo "  standalone - Watcher idle, manual login only"
+echo ""
+echo "Switch with: mise run sso-mode:notify|auto|standalone"
+"""
+
+[tasks."sso-mode:notify"]
+description = "Switch watcher to notify mode (dialog before login)"
+run = """
+mkdir -p "$HOME/.aws/sso-renewer"
+echo "notify" > "$HOME/.aws/sso-renewer/mode"
+echo "✓ Switched to notify mode (takes effect within ${SSO_POLL_SECONDS:-5}s)"
+"""
+
+[tasks."sso-mode:auto"]
+description = "Switch watcher to auto mode (open browser immediately)"
+run = """
+mkdir -p "$HOME/.aws/sso-renewer"
+echo "auto" > "$HOME/.aws/sso-renewer/mode"
+echo "✓ Switched to auto mode (takes effect within ${SSO_POLL_SECONDS:-5}s)"
+"""
+
+[tasks."sso-mode:standalone"]
+description = "Switch watcher to standalone mode (manual login only)"
+run = """
+mkdir -p "$HOME/.aws/sso-renewer"
+echo "standalone" > "$HOME/.aws/sso-renewer/mode"
+echo "✓ Switched to standalone mode — watcher idle, use 'mise run sso-login' to login manually"
+"""
+
 [tasks.sso-clean]
 description = "Clean SSO watcher state and signal files"
 run = """

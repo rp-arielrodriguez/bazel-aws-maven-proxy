@@ -26,15 +26,19 @@ def watcher_state(tmp_path):
     lock_dir = state_dir / "login.lock"
     last_run = state_dir / "last-login-at.txt"
 
+    mode_file = state_dir / "mode"
+
     with patch.object(watcher, 'STATE_DIR', state_dir), \
          patch.object(watcher, 'SIGNAL_FILE', signal_file), \
          patch.object(watcher, 'LOCK_DIR', lock_dir), \
-         patch.object(watcher, 'LAST_RUN_FILE', last_run):
+         patch.object(watcher, 'LAST_RUN_FILE', last_run), \
+         patch.object(watcher, 'MODE_FILE', mode_file):
         yield {
             "state_dir": state_dir,
             "signal_file": signal_file,
             "lock_dir": lock_dir,
             "last_run": last_run,
+            "mode_file": mode_file,
         }
 
 
@@ -247,53 +251,53 @@ class TestShowNotification:
 class TestHandleLogin:
 
     def test_notify_mode_refresh(self):
-        with patch.object(watcher, 'LOGIN_MODE', 'notify'), \
+        with          patch.object(watcher, 'read_mode', return_value='notify'), \
              patch.object(watcher, 'show_notification', return_value="refresh"), \
              patch.object(watcher, 'run_aws_sso_login', return_value=0) as mock_login:
             assert watcher.handle_login("default") == "success"
             mock_login.assert_called_once_with("default")
 
     def test_notify_mode_refresh_login_fails(self):
-        with patch.object(watcher, 'LOGIN_MODE', 'notify'), \
+        with          patch.object(watcher, 'read_mode', return_value='notify'), \
              patch.object(watcher, 'show_notification', return_value="refresh"), \
              patch.object(watcher, 'run_aws_sso_login', return_value=1):
             assert watcher.handle_login("default") == "failed"
 
     def test_notify_mode_dismiss(self):
-        with patch.object(watcher, 'LOGIN_MODE', 'notify'), \
+        with          patch.object(watcher, 'read_mode', return_value='notify'), \
              patch.object(watcher, 'show_notification', return_value="dismiss"), \
              patch.object(watcher, 'run_aws_sso_login') as mock_login:
             assert watcher.handle_login("default") == "dismiss"
             mock_login.assert_not_called()
 
     def test_notify_mode_snooze(self):
-        with patch.object(watcher, 'LOGIN_MODE', 'notify'), \
+        with          patch.object(watcher, 'read_mode', return_value='notify'), \
              patch.object(watcher, 'show_notification', return_value="snooze:900"), \
              patch.object(watcher, 'run_aws_sso_login') as mock_login:
             assert watcher.handle_login("default") == "snooze:900"
             mock_login.assert_not_called()
 
     def test_notify_mode_suppress(self):
-        with patch.object(watcher, 'LOGIN_MODE', 'notify'), \
+        with          patch.object(watcher, 'read_mode', return_value='notify'), \
              patch.object(watcher, 'show_notification', return_value="suppress"), \
              patch.object(watcher, 'run_aws_sso_login') as mock_login:
             assert watcher.handle_login("default") == "suppress"
             mock_login.assert_not_called()
 
     def test_auto_mode_runs_directly(self):
-        with patch.object(watcher, 'LOGIN_MODE', 'auto'), \
+        with          patch.object(watcher, 'read_mode', return_value='auto'), \
              patch.object(watcher, 'show_notification') as mock_notify, \
              patch.object(watcher, 'run_aws_sso_login', return_value=0):
             assert watcher.handle_login("default") == "success"
             mock_notify.assert_not_called()
 
     def test_auto_mode_login_failure(self):
-        with patch.object(watcher, 'LOGIN_MODE', 'auto'), \
+        with          patch.object(watcher, 'read_mode', return_value='auto'), \
              patch.object(watcher, 'run_aws_sso_login', return_value=1):
             assert watcher.handle_login("default") == "failed"
 
     def test_notify_mode_uses_provided_profile(self):
-        with patch.object(watcher, 'LOGIN_MODE', 'notify'), \
+        with          patch.object(watcher, 'read_mode', return_value='notify'), \
              patch.object(watcher, 'show_notification', return_value="dismiss") as mock_notify, \
              patch.object(watcher, 'run_aws_sso_login'):
             watcher.handle_login("staging")
@@ -340,7 +344,7 @@ class TestMainLoopNotifyMode:
 
     def test_refresh_success_clears_signal(self, watcher_state):
         write_signal(watcher_state["signal_file"], profile="dev")
-        with patch.object(watcher, 'LOGIN_MODE', 'notify'), \
+        with          patch.object(watcher, 'read_mode', return_value='notify'), \
              patch.object(watcher, 'POLL_SECONDS', 0), \
              patch.object(watcher, 'COOLDOWN_SECONDS', 0), \
              patch.object(watcher, 'show_notification', return_value="refresh"), \
@@ -352,7 +356,7 @@ class TestMainLoopNotifyMode:
 
     def test_dismiss_keeps_signal(self, watcher_state):
         write_signal(watcher_state["signal_file"], profile="prod")
-        with patch.object(watcher, 'LOGIN_MODE', 'notify'), \
+        with          patch.object(watcher, 'read_mode', return_value='notify'), \
              patch.object(watcher, 'POLL_SECONDS', 0), \
              patch.object(watcher, 'COOLDOWN_SECONDS', 600), \
              patch.object(watcher, 'show_notification', return_value="dismiss"), \
@@ -364,7 +368,7 @@ class TestMainLoopNotifyMode:
 
     def test_login_failure_keeps_signal(self, watcher_state):
         write_signal(watcher_state["signal_file"])
-        with patch.object(watcher, 'LOGIN_MODE', 'notify'), \
+        with          patch.object(watcher, 'read_mode', return_value='notify'), \
              patch.object(watcher, 'POLL_SECONDS', 0), \
              patch.object(watcher, 'COOLDOWN_SECONDS', 0), \
              patch.object(watcher, 'show_notification', return_value="refresh"), \
@@ -375,7 +379,7 @@ class TestMainLoopNotifyMode:
 
     def test_snooze_writes_next_attempt(self, watcher_state):
         write_signal(watcher_state["signal_file"])
-        with patch.object(watcher, 'LOGIN_MODE', 'notify'), \
+        with          patch.object(watcher, 'read_mode', return_value='notify'), \
              patch.object(watcher, 'POLL_SECONDS', 0), \
              patch.object(watcher, 'COOLDOWN_SECONDS', 600), \
              patch.object(watcher, 'show_notification', return_value="snooze:900"), \
@@ -386,7 +390,7 @@ class TestMainLoopNotifyMode:
 
     def test_suppress_clears_signal(self, watcher_state):
         write_signal(watcher_state["signal_file"])
-        with patch.object(watcher, 'LOGIN_MODE', 'notify'), \
+        with          patch.object(watcher, 'read_mode', return_value='notify'), \
              patch.object(watcher, 'POLL_SECONDS', 0), \
              patch.object(watcher, 'COOLDOWN_SECONDS', 600), \
              patch.object(watcher, 'show_notification', return_value="suppress"), \
@@ -396,7 +400,7 @@ class TestMainLoopNotifyMode:
 
     def test_lock_released_after_dismiss(self, watcher_state):
         write_signal(watcher_state["signal_file"])
-        with patch.object(watcher, 'LOGIN_MODE', 'notify'), \
+        with          patch.object(watcher, 'read_mode', return_value='notify'), \
              patch.object(watcher, 'POLL_SECONDS', 0), \
              patch.object(watcher, 'COOLDOWN_SECONDS', 0), \
              patch.object(watcher, 'show_notification', return_value="dismiss"), \
@@ -406,7 +410,7 @@ class TestMainLoopNotifyMode:
 
     def test_lock_released_after_exception(self, watcher_state):
         write_signal(watcher_state["signal_file"])
-        with patch.object(watcher, 'LOGIN_MODE', 'notify'), \
+        with          patch.object(watcher, 'read_mode', return_value='notify'), \
              patch.object(watcher, 'COOLDOWN_SECONDS', 0), \
              patch.object(watcher, 'show_notification', side_effect=RuntimeError("boom")):
             assert watcher.try_acquire_lock() is True
@@ -421,7 +425,7 @@ class TestMainLoopNotifyMode:
     def test_signal_profile_fallback(self, watcher_state):
         signal_data = {"reason": "expired"}
         watcher_state["signal_file"].write_text(json.dumps(signal_data))
-        with patch.object(watcher, 'LOGIN_MODE', 'notify'), \
+        with patch.object(watcher, 'read_mode', return_value='notify'), \
              patch.object(watcher, 'PROFILE', 'fallback-profile'), \
              patch.object(watcher, 'POLL_SECONDS', 0), \
              patch.object(watcher, 'COOLDOWN_SECONDS', 600), \
@@ -430,3 +434,68 @@ class TestMainLoopNotifyMode:
              patch('time.sleep', side_effect=_stop_after(1)):
             watcher.main()
         mock_notify.assert_called_once_with("fallback-profile")
+
+
+# ---------------------------------------------------------------------------
+# Mode management (read_mode / write_mode)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestModeManagement:
+
+    def test_read_mode_from_file(self, watcher_state):
+        watcher_state["mode_file"].write_text("auto\n")
+        assert watcher.read_mode() == "auto"
+
+    def test_read_mode_standalone(self, watcher_state):
+        watcher_state["mode_file"].write_text("standalone\n")
+        assert watcher.read_mode() == "standalone"
+
+    def test_read_mode_falls_back_to_env(self, watcher_state):
+        # No mode file, falls back to env
+        with patch.object(watcher, '_ENV_MODE', 'auto'):
+            assert watcher.read_mode() == "auto"
+
+    def test_read_mode_default_notify(self, watcher_state):
+        # No mode file, no env
+        with patch.object(watcher, '_ENV_MODE', 'notify'):
+            assert watcher.read_mode() == "notify"
+
+    def test_read_mode_ignores_invalid_file(self, watcher_state):
+        watcher_state["mode_file"].write_text("bogus\n")
+        with patch.object(watcher, '_ENV_MODE', 'notify'):
+            assert watcher.read_mode() == "notify"
+
+    def test_read_mode_ignores_invalid_env(self, watcher_state):
+        with patch.object(watcher, '_ENV_MODE', 'bogus'):
+            assert watcher.read_mode() == "notify"
+
+    def test_write_mode(self, watcher_state):
+        watcher.write_mode("standalone")
+        assert watcher_state["mode_file"].read_text().strip() == "standalone"
+
+    def test_write_mode_invalid(self, watcher_state):
+        with pytest.raises(ValueError):
+            watcher.write_mode("bogus")
+
+    def test_standalone_mode_skips_signal(self, watcher_state):
+        """In standalone mode, watcher should not process signals."""
+        write_signal(watcher_state["signal_file"])
+        with patch.object(watcher, 'read_mode', return_value='standalone'), \
+             patch.object(watcher, 'POLL_SECONDS', 0), \
+             patch.object(watcher, 'show_notification') as mock_notify, \
+             patch.object(watcher, 'run_aws_sso_login') as mock_login, \
+             patch('time.sleep', side_effect=_stop_after(2)):
+            watcher.main()
+        mock_notify.assert_not_called()
+        mock_login.assert_not_called()
+        # Signal should still exist (not cleared)
+        assert watcher_state["signal_file"].exists()
+
+    def test_handle_login_standalone_returns_dismiss(self):
+        with patch.object(watcher, 'read_mode', return_value='standalone'), \
+             patch.object(watcher, 'show_notification') as mock_notify, \
+             patch.object(watcher, 'run_aws_sso_login') as mock_login:
+            assert watcher.handle_login("default") == "dismiss"
+            mock_notify.assert_not_called()
+            mock_login.assert_not_called()
