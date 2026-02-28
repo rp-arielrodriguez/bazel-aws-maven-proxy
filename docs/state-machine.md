@@ -86,8 +86,7 @@ stateDiagram-v2
         [*] --> no_cooldown
         no_cooldown --> active : dismiss or suppress or success
         active --> no_cooldown : 600s elapsed
-        active --> no_cooldown : sso-login clears file
-        active --> no_cooldown : sso-logout clears file
+        active --> no_cooldown : sso-login or sso-logout clears file
         note right of active
             Blocks all signal processing
             Default 600s
