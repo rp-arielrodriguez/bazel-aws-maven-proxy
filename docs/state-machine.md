@@ -8,36 +8,36 @@ The watcher operates in one of three modes, switchable at runtime without restar
 
 ```mermaid
 stateDiagram-v2
-    [*] --> notify : default (no mode file)
+    [*] --> notify : default, no mode file
 
-    notify --> auto : mise run sso-mode:auto
-    notify --> standalone : mise run sso-mode:standalone
-    auto --> notify : mise run sso-mode:notify
-    auto --> standalone : mise run sso-mode:standalone
-    standalone --> notify : mise run sso-mode:notify
-    standalone --> auto : mise run sso-mode:auto
+    notify --> auto : sso-mode auto
+    notify --> standalone : sso-mode standalone
+    auto --> notify : sso-mode notify
+    auto --> standalone : sso-mode standalone
+    standalone --> notify : sso-mode notify
+    standalone --> auto : sso-mode auto
 
     state notify {
         [*] --> polling_notify
         polling_notify --> dialog_shown : signal exists + no cooldown + no snooze
         dialog_shown --> login_running : user clicks Refresh
         dialog_shown --> snoozed : user clicks Snooze
-        dialog_shown --> suppressed : user clicks Don't Remind
+        dialog_shown --> suppressed : user clicks Dont Remind
         dialog_shown --> dismissed : user closes / 120s timeout
         login_running --> success : exit code 0
-        login_running --> failed : exit code != 0 or 120s timeout
+        login_running --> failed : nonzero exit or 120s timeout
         success --> polling_notify : signal cleared, cooldown written
         failed --> polling_notify : 30s snooze written to signal
         snoozed --> polling_notify : nextAttemptAfter written to signal
         suppressed --> polling_notify : signal cleared, cooldown written
-        dismissed --> polling_notify : cooldown written (signal kept)
+        dismissed --> polling_notify : cooldown written, signal kept
     }
 
     state auto {
         [*] --> polling_auto
         polling_auto --> auto_login : signal exists + no cooldown + no snooze
         auto_login --> auto_success : exit code 0
-        auto_login --> auto_failed : exit code != 0 or 120s timeout
+        auto_login --> auto_failed : nonzero exit or 120s timeout
         auto_success --> polling_auto : signal cleared, cooldown written
         auto_failed --> polling_auto : 30s snooze written to signal
     }
@@ -45,7 +45,9 @@ stateDiagram-v2
     state standalone {
         [*] --> idle
         idle --> idle : polls every 5s, ignores signals
-        note right of idle : User must run mise run sso-login\nwhich calls aws sso login directly
+        note right of idle
+            User runs sso-login manually
+        end note
     }
 ```
 
@@ -58,20 +60,20 @@ stateDiagram-v2
     [*] --> no_signal : credentials valid
 
     no_signal --> signal_created : monitor detects expiry
-    no_signal --> signal_created : mise run sso-login (notify/auto)
-    no_signal --> no_signal : mise run sso-login (standalone, direct login)
+    no_signal --> signal_created : sso-login in notify or auto mode
+    no_signal --> no_signal : sso-login in standalone mode
 
-    signal_created --> signal_created : watcher polls, cooldown active (skip)
-    signal_created --> signal_snoozed : user snoozes (writes nextAttemptAfter)
+    signal_created --> signal_created : watcher polls, cooldown active
+    signal_created --> signal_snoozed : user snoozes
     signal_created --> handling : watcher picks up signal
 
     signal_snoozed --> signal_snoozed : snooze not expired yet
     signal_snoozed --> handling : snooze expired
 
-    handling --> no_signal : login success (signal cleared)
-    handling --> no_signal : user suppresses (signal cleared)
-    handling --> signal_snoozed : login failed/timeout (30s snooze)
-    handling --> signal_created : user dismisses (cooldown written)
+    handling --> no_signal : login success, signal cleared
+    handling --> no_signal : user suppresses, signal cleared
+    handling --> signal_snoozed : login failed, 30s snooze
+    handling --> signal_created : user dismisses, cooldown written
 ```
 
 ## Cooldown vs Snooze
@@ -80,21 +82,27 @@ Two different throttle mechanisms prevent dialog/login spam.
 
 ```mermaid
 stateDiagram-v2
-    state "Cooldown (last-login-at.txt)" as cooldown {
+    state cooldown {
         [*] --> no_cooldown
         no_cooldown --> active : dismiss or suppress or success
         active --> no_cooldown : 600s elapsed
-        active --> no_cooldown : mise run sso-login clears file
-        active --> no_cooldown : mise run sso-logout clears file
-        note right of active : Blocks all signal processing\nDefault 600s (SSO_COOLDOWN_SECONDS)
+        active --> no_cooldown : sso-login clears file
+        active --> no_cooldown : sso-logout clears file
+        note right of active
+            Blocks all signal processing
+            Default 600s
+        end note
     }
 
-    state "Snooze (nextAttemptAfter in signal)" as snooze {
+    state snooze {
         [*] --> no_snooze
-        no_snooze --> snooze_active : user picks 15m/30m/1h/4h
-        no_snooze --> snooze_active : login failed (auto 30s)
+        no_snooze --> snooze_active : user picks duration
+        no_snooze --> snooze_active : login failed, auto 30s
         snooze_active --> no_snooze : epoch timestamp reached
-        note right of snooze_active : Written inside signal file\nOnly blocks THIS signal
+        note right of snooze_active
+            Written inside signal file
+            Only blocks THIS signal
+        end note
     }
 ```
 
