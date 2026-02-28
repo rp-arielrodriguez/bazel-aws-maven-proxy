@@ -675,3 +675,517 @@ class TestStateMachineTransitions:
              patch('time.sleep', side_effect=_stop_after(1)):
             watcher.main()
         assert not watcher_state["lock_dir"].exists()
+
+
+# ---------------------------------------------------------------------------
+# _get_sso_session_config
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestGetSsoSessionConfig:
+
+    def test_reads_profile_with_sso_session(self, tmp_path):
+        config_file = tmp_path / "config"
+        config_file.write_text(
+            "[profile bazel-proxy]\n"
+            "sso_session = my-session\n"
+            "sso_account_id = 123456\n"
+            "\n"
+            "[sso-session my-session]\n"
+            "sso_start_url = https://my-org.awsapps.com/start\n"
+            "sso_region = us-west-2\n"
+            "sso_registration_scopes = sso:account:access\n"
+        )
+        with patch.object(watcher, 'AWS_CONFIG_FILE', config_file):
+            result = watcher._get_sso_session_config("bazel-proxy")
+        assert result == {
+            "session_name": "my-session",
+            "start_url": "https://my-org.awsapps.com/start",
+            "region": "us-west-2",
+        }
+
+    def test_default_profile(self, tmp_path):
+        config_file = tmp_path / "config"
+        config_file.write_text(
+            "[default]\n"
+            "sso_session = default-session\n"
+            "\n"
+            "[sso-session default-session]\n"
+            "sso_start_url = https://default.awsapps.com/start\n"
+            "sso_region = eu-west-1\n"
+        )
+        with patch.object(watcher, 'AWS_CONFIG_FILE', config_file):
+            result = watcher._get_sso_session_config("default")
+        assert result["start_url"] == "https://default.awsapps.com/start"
+        assert result["region"] == "eu-west-1"
+
+    def test_profile_not_found(self, tmp_path):
+        config_file = tmp_path / "config"
+        config_file.write_text("[default]\nregion = us-east-1\n")
+        with patch.object(watcher, 'AWS_CONFIG_FILE', config_file):
+            assert watcher._get_sso_session_config("nonexistent") == {}
+
+    def test_no_sso_session_key(self, tmp_path):
+        config_file = tmp_path / "config"
+        config_file.write_text("[profile myprof]\nregion = us-east-1\n")
+        with patch.object(watcher, 'AWS_CONFIG_FILE', config_file):
+            assert watcher._get_sso_session_config("myprof") == {}
+
+    def test_sso_session_section_missing(self, tmp_path):
+        config_file = tmp_path / "config"
+        config_file.write_text(
+            "[profile myprof]\n"
+            "sso_session = ghost-session\n"
+        )
+        with patch.object(watcher, 'AWS_CONFIG_FILE', config_file):
+            assert watcher._get_sso_session_config("myprof") == {}
+
+    def test_config_file_missing(self, tmp_path):
+        config_file = tmp_path / "nonexistent"
+        with patch.object(watcher, 'AWS_CONFIG_FILE', config_file):
+            assert watcher._get_sso_session_config("default") == {}
+
+    def test_config_file_corrupt(self, tmp_path):
+        config_file = tmp_path / "config"
+        config_file.write_text("{{not valid ini}}")
+        with patch.object(watcher, 'AWS_CONFIG_FILE', config_file):
+            # configparser may parse this without error but find no sections
+            result = watcher._get_sso_session_config("default")
+            assert result == {}
+
+
+# ---------------------------------------------------------------------------
+# _find_sso_cache_file
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestFindSsoCacheFile:
+
+    def _write_cache(self, cache_dir, filename, data):
+        path = cache_dir / filename
+        path.write_text(json.dumps(data))
+        return path
+
+    def test_finds_matching_cache(self, tmp_path):
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+        self._write_cache(cache_dir, "abc123.json", {
+            "startUrl": "https://my-org.awsapps.com/start",
+            "accessToken": "old-token",
+            "refreshToken": "refresh-tok",
+            "clientId": "cid",
+            "clientSecret": "csecret",
+            "registrationExpiresAt": "2099-01-01T00:00:00Z",
+        })
+        with patch.object(watcher, 'SSO_CACHE_DIR', cache_dir):
+            result = watcher._find_sso_cache_file("https://my-org.awsapps.com/start")
+        assert result is not None
+        assert result["refreshToken"] == "refresh-tok"
+        assert result["_cache_path"] == str(cache_dir / "abc123.json")
+
+    def test_no_matching_start_url(self, tmp_path):
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+        self._write_cache(cache_dir, "abc123.json", {
+            "startUrl": "https://other-org.awsapps.com/start",
+            "accessToken": "tok",
+            "refreshToken": "ref",
+            "clientId": "cid",
+            "clientSecret": "csecret",
+        })
+        with patch.object(watcher, 'SSO_CACHE_DIR', cache_dir):
+            assert watcher._find_sso_cache_file("https://my-org.awsapps.com/start") is None
+
+    def test_missing_refresh_token(self, tmp_path):
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+        self._write_cache(cache_dir, "abc123.json", {
+            "startUrl": "https://my-org.awsapps.com/start",
+            "accessToken": "tok",
+            # no refreshToken
+            "clientId": "cid",
+            "clientSecret": "csecret",
+        })
+        with patch.object(watcher, 'SSO_CACHE_DIR', cache_dir):
+            assert watcher._find_sso_cache_file("https://my-org.awsapps.com/start") is None
+
+    def test_missing_client_id(self, tmp_path):
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+        self._write_cache(cache_dir, "abc123.json", {
+            "startUrl": "https://my-org.awsapps.com/start",
+            "accessToken": "tok",
+            "refreshToken": "ref",
+            # no clientId
+            "clientSecret": "csecret",
+        })
+        with patch.object(watcher, 'SSO_CACHE_DIR', cache_dir):
+            assert watcher._find_sso_cache_file("https://my-org.awsapps.com/start") is None
+
+    def test_empty_cache_dir(self, tmp_path):
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+        with patch.object(watcher, 'SSO_CACHE_DIR', cache_dir):
+            assert watcher._find_sso_cache_file("https://any.url") is None
+
+    def test_corrupt_json_file_skipped(self, tmp_path):
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+        (cache_dir / "bad.json").write_text("not json")
+        self._write_cache(cache_dir, "good.json", {
+            "startUrl": "https://my-org.awsapps.com/start",
+            "accessToken": "tok",
+            "refreshToken": "ref",
+            "clientId": "cid",
+            "clientSecret": "csecret",
+        })
+        with patch.object(watcher, 'SSO_CACHE_DIR', cache_dir):
+            result = watcher._find_sso_cache_file("https://my-org.awsapps.com/start")
+        assert result is not None
+
+    def test_cache_dir_missing(self, tmp_path):
+        cache_dir = tmp_path / "nonexistent"
+        with patch.object(watcher, 'SSO_CACHE_DIR', cache_dir):
+            assert watcher._find_sso_cache_file("https://any.url") is None
+
+
+# ---------------------------------------------------------------------------
+# try_silent_refresh
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestTrySilentRefresh:
+
+    def _make_cache_file(self, tmp_path):
+        """Create a valid cache file and AWS config, return (config_path, cache_dir, cache_path)."""
+        config_file = tmp_path / "config"
+        config_file.write_text(
+            "[profile test-prof]\n"
+            "sso_session = test-session\n"
+            "\n"
+            "[sso-session test-session]\n"
+            "sso_start_url = https://test.awsapps.com/start\n"
+            "sso_region = us-west-2\n"
+        )
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+        cache_path = cache_dir / "token.json"
+        cache_path.write_text(json.dumps({
+            "startUrl": "https://test.awsapps.com/start",
+            "accessToken": "old-access",
+            "refreshToken": "old-refresh",
+            "clientId": "cid-123",
+            "clientSecret": "csecret-456",
+            "registrationExpiresAt": "2099-01-01T00:00:00Z",
+            "expiresAt": "2025-01-01T00:00:00Z",
+        }))
+        return config_file, cache_dir, cache_path
+
+    def test_success(self, tmp_path):
+        config_file, cache_dir, cache_path = self._make_cache_file(tmp_path)
+        api_response = json.dumps({
+            "accessToken": "new-access-token",
+            "expiresIn": 28800,
+            "refreshToken": "new-refresh-token",
+        })
+        proc = _mock_proc(api_response, 0)
+        with patch.object(watcher, 'AWS_CONFIG_FILE', config_file), \
+             patch.object(watcher, 'SSO_CACHE_DIR', cache_dir), \
+             patch.object(watcher.subprocess, 'run', return_value=proc):
+            result = watcher.try_silent_refresh("test-prof")
+        assert result is True
+        # Verify cache file was updated
+        updated = json.loads(cache_path.read_text())
+        assert updated["accessToken"] == "new-access-token"
+        assert updated["refreshToken"] == "new-refresh-token"
+        assert "expiresAt" in updated
+
+    def test_success_no_new_refresh_token(self, tmp_path):
+        """API may not return a new refresh token; old one should be preserved."""
+        config_file, cache_dir, cache_path = self._make_cache_file(tmp_path)
+        api_response = json.dumps({
+            "accessToken": "new-access",
+            "expiresIn": 3600,
+        })
+        proc = _mock_proc(api_response, 0)
+        with patch.object(watcher, 'AWS_CONFIG_FILE', config_file), \
+             patch.object(watcher, 'SSO_CACHE_DIR', cache_dir), \
+             patch.object(watcher.subprocess, 'run', return_value=proc):
+            result = watcher.try_silent_refresh("test-prof")
+        assert result is True
+        updated = json.loads(cache_path.read_text())
+        assert updated["accessToken"] == "new-access"
+        assert updated["refreshToken"] == "old-refresh"  # preserved
+
+    def test_no_sso_config(self, tmp_path):
+        config_file = tmp_path / "config"
+        config_file.write_text("[default]\nregion = us-east-1\n")
+        with patch.object(watcher, 'AWS_CONFIG_FILE', config_file):
+            assert watcher.try_silent_refresh("no-such-profile") is False
+
+    def test_no_cache_file(self, tmp_path):
+        config_file = tmp_path / "config"
+        config_file.write_text(
+            "[profile myprof]\nsso_session = s\n\n"
+            "[sso-session s]\nsso_start_url = https://x.com\nsso_region = us-east-1\n"
+        )
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+        with patch.object(watcher, 'AWS_CONFIG_FILE', config_file), \
+             patch.object(watcher, 'SSO_CACHE_DIR', cache_dir):
+            assert watcher.try_silent_refresh("myprof") is False
+
+    def test_expired_registration(self, tmp_path):
+        config_file, cache_dir, cache_path = self._make_cache_file(tmp_path)
+        # Overwrite cache with expired registration
+        data = json.loads(cache_path.read_text())
+        data["registrationExpiresAt"] = "2020-01-01T00:00:00Z"
+        cache_path.write_text(json.dumps(data))
+        with patch.object(watcher, 'AWS_CONFIG_FILE', config_file), \
+             patch.object(watcher, 'SSO_CACHE_DIR', cache_dir):
+            assert watcher.try_silent_refresh("test-prof") is False
+
+    def test_api_failure(self, tmp_path):
+        config_file, cache_dir, _ = self._make_cache_file(tmp_path)
+        proc = _mock_proc("InvalidGrantException", 254)
+        with patch.object(watcher, 'AWS_CONFIG_FILE', config_file), \
+             patch.object(watcher, 'SSO_CACHE_DIR', cache_dir), \
+             patch.object(watcher.subprocess, 'run', return_value=proc):
+            assert watcher.try_silent_refresh("test-prof") is False
+
+    def test_invalid_json_response(self, tmp_path):
+        config_file, cache_dir, _ = self._make_cache_file(tmp_path)
+        proc = _mock_proc("not json at all", 0)
+        with patch.object(watcher, 'AWS_CONFIG_FILE', config_file), \
+             patch.object(watcher, 'SSO_CACHE_DIR', cache_dir), \
+             patch.object(watcher.subprocess, 'run', return_value=proc):
+            assert watcher.try_silent_refresh("test-prof") is False
+
+    def test_no_access_token_in_response(self, tmp_path):
+        config_file, cache_dir, _ = self._make_cache_file(tmp_path)
+        proc = _mock_proc(json.dumps({"expiresIn": 3600}), 0)
+        with patch.object(watcher, 'AWS_CONFIG_FILE', config_file), \
+             patch.object(watcher, 'SSO_CACHE_DIR', cache_dir), \
+             patch.object(watcher.subprocess, 'run', return_value=proc):
+            assert watcher.try_silent_refresh("test-prof") is False
+
+    def test_subprocess_timeout(self, tmp_path):
+        config_file, cache_dir, _ = self._make_cache_file(tmp_path)
+        with patch.object(watcher, 'AWS_CONFIG_FILE', config_file), \
+             patch.object(watcher, 'SSO_CACHE_DIR', cache_dir), \
+             patch.object(watcher.subprocess, 'run',
+                          side_effect=subprocess.TimeoutExpired("aws", 30)):
+            assert watcher.try_silent_refresh("test-prof") is False
+
+    def test_aws_command_not_found(self, tmp_path):
+        config_file, cache_dir, _ = self._make_cache_file(tmp_path)
+        with patch.object(watcher, 'AWS_CONFIG_FILE', config_file), \
+             patch.object(watcher, 'SSO_CACHE_DIR', cache_dir), \
+             patch.object(watcher.subprocess, 'run',
+                          side_effect=FileNotFoundError):
+            assert watcher.try_silent_refresh("test-prof") is False
+
+    def test_calls_correct_command(self, tmp_path):
+        config_file, cache_dir, _ = self._make_cache_file(tmp_path)
+        proc = _mock_proc(json.dumps({"accessToken": "tok", "expiresIn": 100}), 0)
+        with patch.object(watcher, 'AWS_CONFIG_FILE', config_file), \
+             patch.object(watcher, 'SSO_CACHE_DIR', cache_dir), \
+             patch.object(watcher.subprocess, 'run', return_value=proc) as mock_run:
+            watcher.try_silent_refresh("test-prof")
+        cmd = mock_run.call_args[0][0]
+        assert cmd[0:3] == ["aws", "sso-oidc", "create-token"]
+        assert "--grant-type" in cmd
+        assert "refresh_token" in cmd
+        assert "--client-id" in cmd
+        assert "cid-123" in cmd
+        assert "--client-secret" in cmd
+        assert "csecret-456" in cmd
+        assert "--refresh-token" in cmd
+        assert "old-refresh" in cmd
+        assert "--region" in cmd
+        assert "us-west-2" in cmd
+        assert "--no-sign-request" in cmd
+
+    def test_cache_write_failure(self, tmp_path):
+        """If writing back to cache fails, return False."""
+        config_file, cache_dir, cache_path = self._make_cache_file(tmp_path)
+        api_response = json.dumps({"accessToken": "new", "expiresIn": 100})
+        proc = _mock_proc(api_response, 0)
+        with patch.object(watcher, 'AWS_CONFIG_FILE', config_file), \
+             patch.object(watcher, 'SSO_CACHE_DIR', cache_dir), \
+             patch.object(watcher.subprocess, 'run', return_value=proc), \
+             patch('builtins.open', side_effect=[
+                 # First open (read cache) succeeds
+                 open(str(cache_path)),
+                 # Second open (write cache) fails
+                 PermissionError("denied"),
+             ]):
+            assert watcher.try_silent_refresh("test-prof") is False
+
+
+# ---------------------------------------------------------------------------
+# open_url_with_tab_reuse
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestOpenUrlWithTabReuse:
+
+    def test_chrome_reuse(self):
+        proc = _mock_proc("reused", 0)
+        with patch.object(watcher.subprocess, 'run', return_value=proc):
+            assert watcher.open_url_with_tab_reuse("https://example.com") == "reused"
+
+    def test_chrome_new_tab(self):
+        proc = _mock_proc("new", 0)
+        with patch.object(watcher.subprocess, 'run', return_value=proc):
+            assert watcher.open_url_with_tab_reuse("https://example.com") == "new"
+
+    def test_no_chrome_falls_to_safari(self):
+        chrome_proc = _mock_proc("no-chrome", 0)
+        safari_proc = _mock_proc("reused", 0)
+        with patch.object(watcher.subprocess, 'run',
+                          side_effect=[chrome_proc, safari_proc]):
+            assert watcher.open_url_with_tab_reuse("https://example.com") == "reused"
+
+    def test_no_browsers_falls_to_open(self):
+        chrome_proc = _mock_proc("no-chrome", 0)
+        safari_proc = _mock_proc("no-safari", 0)
+        open_proc = _mock_proc("", 0)
+        with patch.object(watcher.subprocess, 'run',
+                          side_effect=[chrome_proc, safari_proc, open_proc]):
+            assert watcher.open_url_with_tab_reuse("https://example.com") == "fallback"
+
+    def test_osascript_exception_falls_through(self):
+        with patch.object(watcher.subprocess, 'run',
+                          side_effect=[
+                              RuntimeError("chrome fail"),
+                              RuntimeError("safari fail"),
+                              _mock_proc("", 0),  # open fallback
+                          ]):
+            assert watcher.open_url_with_tab_reuse("https://example.com") == "fallback"
+
+    def test_url_embedded_in_script(self):
+        proc = _mock_proc("new", 0)
+        with patch.object(watcher.subprocess, 'run', return_value=proc) as mock_run:
+            watcher.open_url_with_tab_reuse("https://device.sso.us-west-2.amazonaws.com/?code=ABC")
+            script = mock_run.call_args[0][0][2]  # osascript -e <script>
+            assert "https://device.sso.us-west-2.amazonaws.com/?code=ABC" in script
+
+
+# ---------------------------------------------------------------------------
+# Silent mode in handle_login
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestSilentModeHandleLogin:
+
+    def test_silent_mode_success(self):
+        """Silent mode: silent refresh works → success, no browser/dialog."""
+        with patch.object(watcher, 'read_mode', return_value='silent'), \
+             patch.object(watcher, 'try_silent_refresh', return_value=True), \
+             patch.object(watcher, 'show_notification') as mock_notify, \
+             patch.object(watcher, 'run_aws_sso_login') as mock_login:
+            assert watcher.handle_login("default") == "success"
+            mock_notify.assert_not_called()
+            mock_login.assert_not_called()
+
+    def test_silent_mode_failure(self):
+        """Silent mode: silent refresh fails → 'failed', no browser fallback."""
+        with patch.object(watcher, 'read_mode', return_value='silent'), \
+             patch.object(watcher, 'try_silent_refresh', return_value=False), \
+             patch.object(watcher, 'show_notification') as mock_notify, \
+             patch.object(watcher, 'run_aws_sso_login') as mock_login:
+            assert watcher.handle_login("default") == "failed"
+            mock_notify.assert_not_called()
+            mock_login.assert_not_called()
+
+    def test_notify_tries_silent_first_success(self):
+        """Notify mode: silent refresh succeeds → no dialog shown."""
+        with patch.object(watcher, 'read_mode', return_value='notify'), \
+             patch.object(watcher, 'try_silent_refresh', return_value=True), \
+             patch.object(watcher, 'show_notification') as mock_notify, \
+             patch.object(watcher, 'run_aws_sso_login') as mock_login:
+            assert watcher.handle_login("default") == "success"
+            mock_notify.assert_not_called()
+            mock_login.assert_not_called()
+
+    def test_auto_tries_silent_first_success(self):
+        """Auto mode: silent refresh succeeds → no browser opened."""
+        with patch.object(watcher, 'read_mode', return_value='auto'), \
+             patch.object(watcher, 'try_silent_refresh', return_value=True), \
+             patch.object(watcher, 'show_notification') as mock_notify, \
+             patch.object(watcher, 'run_aws_sso_login') as mock_login:
+            assert watcher.handle_login("default") == "success"
+            mock_notify.assert_not_called()
+            mock_login.assert_not_called()
+
+    def test_notify_falls_back_after_silent_failure(self):
+        """Notify mode: silent fails → dialog shown → refresh → login."""
+        with patch.object(watcher, 'read_mode', return_value='notify'), \
+             patch.object(watcher, 'try_silent_refresh', return_value=False), \
+             patch.object(watcher, 'show_notification', return_value="refresh"), \
+             patch.object(watcher, 'run_aws_sso_login', return_value=0) as mock_login:
+            assert watcher.handle_login("default") == "success"
+            mock_login.assert_called_once()
+
+    def test_auto_falls_back_after_silent_failure(self):
+        """Auto mode: silent fails → browser login directly."""
+        with patch.object(watcher, 'read_mode', return_value='auto'), \
+             patch.object(watcher, 'try_silent_refresh', return_value=False), \
+             patch.object(watcher, 'run_aws_sso_login', return_value=0) as mock_login:
+            assert watcher.handle_login("default") == "success"
+            mock_login.assert_called_once()
+
+    def test_read_mode_silent(self, watcher_state):
+        """Mode file with 'silent' is valid."""
+        watcher_state["mode_file"].write_text("silent\n")
+        assert watcher.read_mode() == "silent"
+
+    def test_write_mode_silent(self, watcher_state):
+        watcher.write_mode("silent")
+        assert watcher_state["mode_file"].read_text().strip() == "silent"
+
+
+# ---------------------------------------------------------------------------
+# Silent mode main loop integration
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestSilentModeMainLoop:
+
+    def test_silent_success_clears_signal(self, watcher_state):
+        """Silent mode: refresh works → signal cleared, cooldown written."""
+        write_signal(watcher_state["signal_file"], profile="dev")
+        with patch.object(watcher, 'read_mode', return_value='silent'), \
+             patch.object(watcher, 'POLL_SECONDS', 0), \
+             patch.object(watcher, 'COOLDOWN_SECONDS', 0), \
+             patch.object(watcher, 'try_silent_refresh', return_value=True), \
+             patch('time.sleep', side_effect=_stop_after(2)):
+            watcher.main()
+        assert not watcher_state["signal_file"].exists()
+        assert watcher_state["last_run"].exists()
+
+    def test_silent_failure_writes_30s_snooze(self, watcher_state):
+        """Silent mode: refresh fails → 30s snooze, signal kept."""
+        write_signal(watcher_state["signal_file"])
+        with patch.object(watcher, 'read_mode', return_value='silent'), \
+             patch.object(watcher, 'POLL_SECONDS', 0), \
+             patch.object(watcher, 'COOLDOWN_SECONDS', 0), \
+             patch.object(watcher, 'try_silent_refresh', return_value=False), \
+             patch('time.sleep', side_effect=_stop_after(2)):
+            watcher.main()
+        assert watcher_state["signal_file"].exists()
+        data = json.loads(watcher_state["signal_file"].read_text())
+        assert data["nextAttemptAfter"] <= time.time() + 31
+        assert data["nextAttemptAfter"] > time.time() + 20
+
+    def test_silent_lock_released(self, watcher_state):
+        """Lock released after silent mode processing."""
+        write_signal(watcher_state["signal_file"])
+        with patch.object(watcher, 'read_mode', return_value='silent'), \
+             patch.object(watcher, 'POLL_SECONDS', 0), \
+             patch.object(watcher, 'COOLDOWN_SECONDS', 0), \
+             patch.object(watcher, 'try_silent_refresh', return_value=True), \
+             patch('time.sleep', side_effect=_stop_after(2)):
+            watcher.main()
+        assert not watcher_state["lock_dir"].exists()

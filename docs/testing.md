@@ -19,12 +19,12 @@ tests/
 │   └── sample_aws_config.ini
 └── unit/
     ├── test_s3proxy.py      # S3 proxy tests (19 tests)
-    └── test_watcher.py      # SSO watcher tests (69 tests)
+    └── test_watcher.py      # SSO watcher tests (112 tests)
 ```
 
 ## Test Coverage
 
-**88 passing tests** (19 s3proxy + 69 watcher)
+**131 passing tests** (19 s3proxy + 112 watcher)
 
 ### S3 Proxy Tests (`tests/unit/test_s3proxy.py`)
 
@@ -90,6 +90,33 @@ tests/
 - Failure writes 30s snooze but NOT cooldown
 - Mode switch mid-loop takes effect next cycle
 - Lock released after auto success, auto failure, snooze
+
+**AWS Config Parsing — `TestGetSsoSessionConfig`** (7 tests):
+- Read profile with sso-session, default profile
+- Profile not found, no sso_session key, session section missing
+- Config file missing, corrupt config file
+
+**SSO Cache Discovery — `TestFindSsoCacheFile`** (7 tests):
+- Find matching cache, no matching startUrl, missing refreshToken
+- Missing clientId, empty cache dir, corrupt JSON skipped, cache dir missing
+
+**Silent Token Refresh — `TestTrySilentRefresh`** (12 tests):
+- Success (with/without new refresh token), correct command args
+- No SSO config, no cache file, expired registration
+- API failure, invalid JSON, no accessToken in response
+- Subprocess timeout, aws not found, cache write failure
+
+**Browser Tab Reuse — `TestOpenUrlWithTabReuse`** (6 tests):
+- Chrome reuse, Chrome new tab, fallback Chrome→Safari
+- No browsers falls to open, osascript exception, URL in script
+
+**Silent Mode Handle Login — `TestSilentModeHandleLogin`** (8 tests):
+- Silent mode success/failure, notify/auto try silent first
+- Notify/auto fall back after silent failure
+- Read/write silent mode
+
+**Silent Mode Main Loop — `TestSilentModeMainLoop`** (3 tests):
+- Success clears signal, failure writes 30s snooze, lock released
 
 ## Running Tests
 

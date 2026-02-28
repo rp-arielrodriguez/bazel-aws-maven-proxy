@@ -28,7 +28,8 @@ SSO Monitor checks credentials every 60s
 Writes signal → ~/.aws/sso-renewer/login-required.json
        ↓ watcher polls every 5s
 SSO Watcher (launchd) detects signal
-       ↓ notify: dialog | auto: browser | standalone: idle
+       ↓ silent refresh (all modes try first)
+       ↓ notify: dialog | auto: browser | silent: done | standalone: idle
 aws sso login → browser → user completes MFA
        ↓
 S3 Proxy + Monitor reload credentials (no restart)
@@ -149,6 +150,7 @@ mise run sso-logs:follow      # Stream logs (Ctrl+C to stop)
 mise run sso-mode             # Show current mode
 mise run sso-mode:notify      # Switch to notify (dialog)
 mise run sso-mode:auto        # Switch to auto (browser immediately)
+mise run sso-mode:silent      # Switch to silent (token refresh only)
 mise run sso-mode:standalone  # Switch to standalone (manual only)
 mise run sso-restart          # Restart watcher
 mise run sso-clean            # Clear state/signals
@@ -158,11 +160,14 @@ mise run sso-clean            # Clear state/signals
 
 | Mode | Behavior | Best for |
 |------|----------|----------|
-| `notify` (default) | Shows dialog: Refresh / Snooze / Don't Remind | Daily use |
-| `auto` | Opens browser immediately on expiry | Unattended |
+| `notify` (default) | Silent refresh, then dialog: Refresh / Snooze / Don't Remind | Daily use |
+| `auto` | Silent refresh, then opens browser immediately | Unattended |
+| `silent` | Silent token refresh only, never opens browser | Headless/CI |
 | `standalone` | Watcher idle, manual `sso-login` only | Full control |
 
-Switch at runtime: `mise run sso-mode:notify|auto|standalone` — takes effect within seconds.
+All modes except `standalone` attempt silent token refresh first using the cached refresh token. Only when that fails do they fall back to their mode-specific behavior.
+
+Switch at runtime: `mise run sso-mode:notify|auto|silent|standalone` — takes effect within seconds.
 
 ### Dialog Actions Quick Reference
 
@@ -189,7 +194,7 @@ Environment variables in `.env`:
 | `CHECK_INTERVAL` | Monitor check interval (seconds) | `60` |
 | `SSO_COOLDOWN_SECONDS` | Watcher cooldown between logins | `600` |
 | `SSO_POLL_SECONDS` | Watcher signal poll interval | `5` |
-| `SSO_LOGIN_MODE` | `notify`, `auto`, or `standalone` | `notify` |
+| `SSO_LOGIN_MODE` | `notify`, `auto`, `silent`, or `standalone` | `notify` |
 | `CONTAINER_ENGINE` | `podman` or `docker` | auto-detect |
 
 ## Troubleshooting
@@ -229,13 +234,13 @@ aws s3 ls s3://your-bucket/ --profile bazel-cache
 |----------|-------------|
 | [docs/sso-watcher.md](docs/sso-watcher.md) | SSO watcher architecture and internals |
 | [docs/state-machine.md](docs/state-machine.md) | State diagrams (Mermaid) for modes, signals, cooldown |
-| [docs/testing.md](docs/testing.md) | Test structure and coverage (88 tests) |
+| [docs/testing.md](docs/testing.md) | Test structure and coverage (131 tests) |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute |
 
 ## Testing
 
 ```bash
-pytest              # Run all 88 tests
+pytest              # Run all 131 tests
 ./run_tests.sh      # Helper script
 ```
 

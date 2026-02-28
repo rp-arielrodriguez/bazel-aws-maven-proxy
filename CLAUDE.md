@@ -42,6 +42,7 @@ mise run sso-logs:follow      # Stream logs (Ctrl+C to stop)
 mise run sso-mode             # Show current mode
 mise run sso-mode:notify      # Switch to notify (dialog)
 mise run sso-mode:auto        # Switch to auto (browser immediately)
+mise run sso-mode:silent      # Switch to silent (token refresh only)
 mise run sso-mode:standalone  # Switch to standalone (manual only)
 mise run sso-restart          # Restart watcher
 mise run sso-clean            # Clear state/signals
@@ -59,7 +60,7 @@ Environment variables in `.env` (copy from `.env.example`):
 - `CHECK_INTERVAL`: Monitor check interval in seconds (default: 60)
 - `SSO_COOLDOWN_SECONDS`: Watcher cooldown (default: 600)
 - `SSO_POLL_SECONDS`: Watcher poll interval (default: 5)
-- `SSO_LOGIN_MODE`: Login behavior - `notify` (default, dialog), `auto` (browser immediately), `standalone` (manual only). Toggleable at runtime via `mise run sso-mode:*`
+- `SSO_LOGIN_MODE`: Login behavior - `notify` (default, dialog), `auto` (browser immediately), `silent` (token refresh only, no browser), `standalone` (manual only). Toggleable at runtime via `mise run sso-mode:*`
 - `CONTAINER_ENGINE`: `podman` or `docker` (auto-detect if unset, prefers podman)
 
 ## Architecture
@@ -93,11 +94,10 @@ Environment variables in `.env` (copy from `.env.example`):
 - **Purpose**: Detect signals and trigger login on host
 - **Key functionality**:
   - Watches `~/.aws/sso-renewer/` for signal files
-  - In `notify` mode (default): shows macOS dialog with 3 options:
-    - **Refresh**: runs `aws sso login` (opens browser)
-    - **Snooze**: pick 15m/30m/1h/4h, writes `nextAttemptAfter` to signal file
-    - **Don't Remind**: shows warning, clears signal (manual `mise run sso-login` needed later)
-  - In `auto` mode: triggers `aws sso login` immediately (opens browser)
+  - All modes except standalone try silent token refresh first (via cached refresh token)
+  - In `notify` mode (default): silent refresh → dialog with Refresh/Snooze/Don't Remind
+  - In `auto` mode: silent refresh → opens browser immediately
+  - In `silent` mode: silent refresh only, never opens browser
   - In `standalone` mode: watcher idles, manual `mise run sso-login` only
   - Clears signal on success
   - Atomic locking, cooldown protection (default 600s)
@@ -107,7 +107,7 @@ Environment variables in `.env` (copy from `.env.example`):
 ## State Machines
 
 See [docs/state-machine.md](docs/state-machine.md) for formal state diagrams (Mermaid) covering:
-- Watcher mode transitions (notify/auto/standalone)
+- Watcher mode transitions (notify/auto/silent/standalone)
 - Signal lifecycle (created → snoozed → handled → cleared)
 - Cooldown vs snooze mechanics
 - Machine-readable transition table

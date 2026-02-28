@@ -10,10 +10,14 @@ SSO Monitor (Container) checks credentials every 60s
 Writes signal → ~/.aws/sso-renewer/login-required.json
        ↓ polls every 5s
 SSO Watcher (launchd) detects signal
-       ↓ notify mode: Refresh/Snooze/Don't Remind
-       ↓ auto mode: opens browser immediately
-       ↓ standalone mode: idle (manual only)
-aws sso login opens browser
+       ↓ tries silent token refresh first (all modes)
+       ↓ success? done — no browser needed
+       ↓ failed? fallback per mode:
+       ↓   notify: Refresh/Snooze/Don't Remind dialog
+       ↓   auto: opens browser immediately
+       ↓   silent: gives up (no browser)
+       ↓   standalone: idle (manual only)
+aws sso login opens browser (with tab reuse)
        ↓ user completes MFA
 New credentials → ~/.aws/sso/cache/*.json
        ↓ both containers detect
@@ -26,7 +30,8 @@ S3 Proxy + Monitor reload (no restart)
 
 **Solution:**
 - Monitor (container) detects expiration, writes signal file
-- Watcher (host) reads signal, asks user (notify mode) or triggers login directly (auto mode)
+- Watcher (host) reads signal, tries silent token refresh first
+- If silent refresh fails: asks user (notify), opens browser (auto), or gives up (silent)
 - Proxy auto-reloads credentials without restart
 
 ## Components
@@ -35,12 +40,13 @@ S3 Proxy + Monitor reload (no restart)
 
 Host daemon (launchd user agent) that:
 - Polls `~/.aws/sso-renewer/login-required.json` every 5s
-- In `notify` mode (default): shows macOS dialog with Refresh/Snooze/Don't Remind
-  - **Refresh**: opens browser for SSO login
-  - **Snooze**: pick 15m/30m/1h/4h, writes `nextAttemptAfter` to signal
-  - **Don't Remind**: clears signal after warning (manual `mise run sso-login` needed later)
-- In `auto` mode: runs login immediately (opens browser)
-- In `standalone` mode: watcher idles, manual `mise run sso-login` only
+- All modes except `standalone` try **silent token refresh** first using cached refresh token
+- If silent refresh succeeds: credentials renewed without browser, signal cleared
+- If silent refresh fails, falls back per mode:
+  - `notify` (default): macOS dialog with Refresh/Snooze/Don't Remind
+  - `auto`: opens browser immediately for SSO login (with tab reuse)
+  - `silent`: returns failure — no browser fallback
+  - `standalone`: watcher idles, manual `mise run sso-login` only
 - Uses atomic directory locking (`mkdir`)
 - Cooldown (default 600s) prevents popup spam after dismiss
 - Runs `aws sso login --profile <profile>` with 120s timeout
@@ -107,6 +113,7 @@ mise run sso-logs:follow      # Stream logs (Ctrl+C to stop)
 mise run sso-mode             # Show current mode
 mise run sso-mode:notify      # Switch to notify (dialog)
 mise run sso-mode:auto        # Switch to auto (browser immediately)
+mise run sso-mode:silent      # Switch to silent (token refresh only)
 mise run sso-mode:standalone  # Switch to standalone (manual only)
 mise run sso-restart          # Restart watcher
 mise run sso-clean            # Clear state/signals
@@ -119,15 +126,35 @@ All settings via `.env`:
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `AWS_PROFILE` | AWS CLI profile | `default` |
-| `SSO_LOGIN_MODE` | `notify`, `auto`, or `standalone` | `notify` |
+| `SSO_LOGIN_MODE` | `notify`, `auto`, `silent`, or `standalone` | `notify` |
 | `SSO_COOLDOWN_SECONDS` | Cooldown between logins (seconds) | `600` |
 | `SSO_POLL_SECONDS` | Signal poll interval (seconds) | `5` |
 
 After changing `.env`, run `mise run sso-install` to apply.
 
-Runtime mode toggle: `mise run sso-mode:notify|auto|standalone` — takes effect within seconds, no restart needed.
+Runtime mode toggle: `mise run sso-mode:notify|auto|silent|standalone` — takes effect within seconds, no restart needed.
 
 ## Implementation Details
+
+### Silent Token Refresh
+
+All modes except `standalone` try silent refresh before any user interaction:
+
+1. Read `~/.aws/config` for the profile's `sso_session` config
+2. Find matching cache file in `~/.aws/sso/cache/` by `startUrl`
+3. Call `aws sso-oidc create-token --grant-type refresh_token` (no browser)
+4. Write new access token back to cache file
+
+**Requirements:**
+- `sso_registration_scopes = sso:account:access` in `[sso-session]` config
+- Valid `refreshToken` in cache file (admin-controlled lifetime, default 8h, max 90d)
+- Client registration not expired (`registrationExpiresAt`)
+
+If any step fails, falls back to mode-specific behavior (dialog, browser, or nothing).
+
+### Browser Tab Reuse
+
+When browser login is needed (notify/auto modes), the watcher reuses existing AWS SSO tabs instead of opening new ones. Checks Chrome first, then Safari, then falls back to system default.
 
 ### Atomic Locking
 
@@ -184,6 +211,7 @@ mise run sso-uninstall && mise run sso-install  # Reinstall
 ### Browser not opening
 
 - Check mode: `mise run sso-mode` — in `notify` mode, you must click "Refresh"
+- In `silent` mode, only token refresh is attempted — no browser fallback
 - In `standalone` mode, watcher is idle — use `mise run sso-login` directly
 - Verify profile exists: `aws configure list-profiles`
 - Check `PATH` in plist includes AWS CLI location

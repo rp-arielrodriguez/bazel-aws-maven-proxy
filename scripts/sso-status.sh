@@ -37,14 +37,19 @@ fi
 case "$MODE" in
     standalone) echo "  Mode:         $MODE — idle, manual login only" ;;
     auto)       echo "  Mode:         $MODE — opens browser on expiry" ;;
+    silent)     echo "  Mode:         $MODE — token refresh only, no browser" ;;
     notify)     echo "  Mode:         $MODE — asks before opening browser" ;;
     *)          echo "  Mode:         $MODE (unknown)" ;;
 esac
 
 # Credentials & signal
 if [ -f "$SIGNAL_FILE" ]; then
-    if [ "$MODE" = "standalone" ]; then
-        echo "  Credentials:  ⚠ expired — run: mise run sso-login"
+    if [ "$MODE" = "standalone" ] || [ "$MODE" = "silent" ]; then
+        if [ "$MODE" = "silent" ]; then
+            echo "  Credentials:  ⚠ expired — silent refresh will retry"
+        else
+            echo "  Credentials:  ⚠ expired — run: mise run sso-login"
+        fi
     else
         # Check if snooze is active
         SNOOZE_UNTIL=""

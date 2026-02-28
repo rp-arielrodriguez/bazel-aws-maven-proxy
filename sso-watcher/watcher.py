@@ -3,28 +3,37 @@
 Host-side AWS SSO watcher for bazel-aws-maven-proxy.
 
 Watches for a signal file indicating login is required, then either:
+- Silently refreshes token without browser (silent mode)
 - Shows a macOS notification asking the user to confirm (notify mode, default)
 - Automatically triggers aws sso login (auto mode)
 - Does nothing, manual login only (standalone mode)
 
+All modes except standalone try silent token refresh first. If the cached
+refresh token is still valid, credentials are renewed without browser
+interaction. Only when silent refresh fails does it fall back to the
+mode-specific behavior (dialog, browser, or nothing).
+
 Modes:
-- notify (default): dialog with Refresh/Snooze/Don't Remind
-- auto: opens browser immediately on signal
+- notify (default): try silent refresh, then dialog with Refresh/Snooze/Don't Remind
+- auto: try silent refresh, then open browser immediately
+- silent: try silent refresh only, never open browser
 - standalone: watcher idles, user must run `mise run sso-login` manually
 
 Mode is read from state file (~/.aws/sso-renewer/mode) first, then
 SSO_LOGIN_MODE env var, then defaults to "notify". Toggle at runtime
-with `mise run sso-mode:notify`, `sso-mode:auto`, `sso-mode:standalone`.
+with `mise run sso-mode:notify|auto|silent|standalone`.
 """
+import configparser
+import glob
 import json
 import os
 import subprocess
 import sys
 import time
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-VALID_MODES = ("notify", "auto", "standalone")
+VALID_MODES = ("notify", "auto", "silent", "standalone")
 
 # ---- Configuration (override via environment) ----
 PROFILE = os.environ.get("AWS_PROFILE", "default")
@@ -113,6 +122,264 @@ def load_signal() -> dict:
             return json.load(f)
     except Exception:
         return {}
+
+
+# ---- AWS config/cache paths ----
+AWS_CONFIG_FILE = Path(os.environ.get(
+    "AWS_CONFIG_FILE",
+    str(Path.home() / ".aws" / "config")
+))
+SSO_CACHE_DIR = Path(os.environ.get(
+    "SSO_CACHE_DIR",
+    str(Path.home() / ".aws" / "sso" / "cache")
+))
+
+
+def _get_sso_session_config(profile: str) -> dict:
+    """
+    Read sso-session config for a profile from ~/.aws/config.
+
+    Returns dict with keys: start_url, region, session_name.
+    Returns empty dict if not found or not configured.
+    """
+    try:
+        config = configparser.ConfigParser()
+        config.read(str(AWS_CONFIG_FILE))
+    except Exception:
+        return {}
+
+    # Find the profile section
+    profile_section = f"profile {profile}" if profile != "default" else "default"
+    if not config.has_section(profile_section):
+        return {}
+
+    session_name = config.get(profile_section, "sso_session", fallback=None)
+    if not session_name:
+        return {}
+
+    # Find the sso-session section
+    session_section = f"sso-session {session_name}"
+    if not config.has_section(session_section):
+        return {}
+
+    return {
+        "session_name": session_name,
+        "start_url": config.get(session_section, "sso_start_url", fallback=""),
+        "region": config.get(session_section, "sso_region", fallback=""),
+    }
+
+
+def _find_sso_cache_file(start_url: str) -> dict | None:
+    """
+    Find the SSO cache file matching a start URL.
+
+    Scans ~/.aws/sso/cache/*.json for a file with a matching startUrl
+    that contains accessToken, refreshToken, clientId, clientSecret.
+
+    Returns the parsed cache data dict, or None if not found.
+    """
+    cache_pattern = str(SSO_CACHE_DIR / "*.json")
+    for path in glob.glob(cache_pattern):
+        try:
+            with open(path) as f:
+                data = json.load(f)
+            if (data.get("startUrl") == start_url
+                    and "refreshToken" in data
+                    and "clientId" in data
+                    and "clientSecret" in data):
+                data["_cache_path"] = path
+                return data
+        except Exception:
+            continue
+    return None
+
+
+def try_silent_refresh(profile: str) -> bool:
+    """
+    Attempt to silently refresh SSO token using the cached refresh token.
+
+    Flow:
+    1. Read sso-session config from ~/.aws/config for the profile
+    2. Find matching cache file in ~/.aws/sso/cache/ by startUrl
+    3. Call `aws sso-oidc create-token --grant-type refresh_token`
+    4. Write new token back to cache file
+
+    Returns True on success, False if silent refresh is not possible
+    or fails (caller should fall back to browser-based login).
+    """
+    print(f"[sso-watcher] attempting silent token refresh for {profile}", flush=True)
+
+    # Step 1: Get sso-session config
+    session = _get_sso_session_config(profile)
+    if not session.get("start_url"):
+        print("[sso-watcher] silent refresh: no sso-session config found", flush=True)
+        return False
+
+    # Step 2: Find cache file
+    cache = _find_sso_cache_file(session["start_url"])
+    if not cache:
+        print("[sso-watcher] silent refresh: no cache file with refresh token", flush=True)
+        return False
+
+    # Check if client registration is still valid
+    reg_expires = cache.get("registrationExpiresAt", "")
+    if reg_expires:
+        try:
+            exp_dt = datetime.fromisoformat(reg_expires.replace("Z", "+00:00"))
+            if exp_dt < datetime.now(timezone.utc):
+                print("[sso-watcher] silent refresh: client registration expired", flush=True)
+                return False
+        except Exception:
+            pass
+
+    # Step 3: Call sso-oidc create-token
+    region = session.get("region") or cache.get("region", "us-east-1")
+    cmd = [
+        "aws", "sso-oidc", "create-token",
+        "--client-id", cache["clientId"],
+        "--client-secret", cache["clientSecret"],
+        "--grant-type", "refresh_token",
+        "--refresh-token", cache["refreshToken"],
+        "--region", region,
+        "--no-sign-request",
+    ]
+
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+        print(f"[sso-watcher] silent refresh: command error: {e}", flush=True)
+        return False
+
+    if proc.returncode != 0:
+        stderr = proc.stderr.strip()
+        print(f"[sso-watcher] silent refresh failed: {stderr}", flush=True)
+        return False
+
+    # Step 4: Parse response and write back to cache
+    try:
+        result = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        print("[sso-watcher] silent refresh: invalid JSON response", flush=True)
+        return False
+
+    new_access = result.get("accessToken")
+    new_expires = result.get("expiresIn")
+    new_refresh = result.get("refreshToken")
+
+    if not new_access:
+        print("[sso-watcher] silent refresh: no accessToken in response", flush=True)
+        return False
+
+    # Update cache file
+    cache_path = cache["_cache_path"]
+    try:
+        with open(cache_path) as f:
+            cache_data = json.load(f)
+
+        cache_data["accessToken"] = new_access
+        if new_expires:
+            expires_at = datetime.now(timezone.utc) + timedelta(seconds=new_expires)
+            cache_data["expiresAt"] = expires_at.strftime("%Y-%m-%dT%H:%M:%SZ")
+        if new_refresh:
+            cache_data["refreshToken"] = new_refresh
+
+        with open(cache_path, "w") as f:
+            json.dump(cache_data, f)
+
+        print("[sso-watcher] silent refresh successful", flush=True)
+        return True
+    except Exception as e:
+        print(f"[sso-watcher] silent refresh: failed to write cache: {e}", flush=True)
+        return False
+
+
+# ---- Browser tab reuse ----
+
+_TAB_REUSE_SCRIPT_CHROME = '''
+tell application "System Events"
+    if not (exists process "Google Chrome") then return "no-chrome"
+end tell
+tell application "Google Chrome"
+    repeat with w in windows
+        set tabIndex to 0
+        repeat with t in tabs of w
+            set tabIndex to tabIndex + 1
+            if URL of t contains "device.sso" or URL of t contains ".amazonaws.com/authorize" or URL of t contains "awsapps.com" then
+                set URL of t to "{url}"
+                set active tab index of w to tabIndex
+                set index of w to 1
+                activate
+                return "reused"
+            end if
+        end repeat
+    end repeat
+    tell window 1
+        make new tab with properties {{URL:"{url}"}}
+    end tell
+    activate
+    return "new"
+end tell
+'''
+
+_TAB_REUSE_SCRIPT_SAFARI = '''
+tell application "System Events"
+    if not (exists process "Safari") then return "no-safari"
+end tell
+tell application "Safari"
+    repeat with w in windows
+        repeat with t in tabs of w
+            if URL of t contains "device.sso" or URL of t contains ".amazonaws.com/authorize" or URL of t contains "awsapps.com" then
+                set URL of t to "{url}"
+                set current tab of w to t
+                return "reused"
+            end if
+        end repeat
+    end repeat
+    tell window 1
+        set current tab to (make new tab with properties {{URL:"{url}"}})
+    end tell
+    activate
+    return "new"
+end tell
+'''
+
+
+def open_url_with_tab_reuse(url: str) -> str:
+    """
+    Open a URL, reusing an existing AWS SSO tab if one exists.
+
+    Tries Chrome first, then Safari, then falls back to `open <url>`.
+
+    Returns: "reused", "new", or "fallback"
+    """
+    for script_tpl in [_TAB_REUSE_SCRIPT_CHROME, _TAB_REUSE_SCRIPT_SAFARI]:
+        script = script_tpl.format(url=url)
+        try:
+            proc = subprocess.run(
+                ["osascript", "-e", script],
+                capture_output=True, text=True, timeout=10,
+            )
+            result = proc.stdout.strip()
+            if result in ("reused", "new"):
+                print(f"[sso-watcher] browser tab: {result}", flush=True)
+                return result
+            # "no-chrome" or "no-safari" — try next browser
+        except Exception:
+            continue
+
+    # Fallback: use system default
+    try:
+        subprocess.run(["open", url], timeout=10)
+        print("[sso-watcher] browser tab: fallback (open)", flush=True)
+        return "fallback"
+    except Exception as e:
+        print(f"[sso-watcher] failed to open URL: {e}", flush=True)
+        return "fallback"
 
 
 def should_trigger_login() -> bool:
@@ -277,11 +544,11 @@ SSO_LOGIN_TIMEOUT = int(os.environ.get("SSO_LOGIN_TIMEOUT", "120"))  # seconds
 
 def run_aws_sso_login(profile: str | None = None) -> int:
     """
-    Run aws sso login with a timeout.
+    Run aws sso login with a timeout, reusing browser tabs when possible.
 
-    AWS CLI will open the browser when needed. If the user doesn't
-    complete auth within SSO_LOGIN_TIMEOUT seconds (default 120),
-    the process is killed so the watcher can retry later.
+    Uses BROWSER env var to intercept the URL that AWS CLI would open,
+    then opens it via AppleScript for tab reuse. The CLI continues
+    polling for completion.
 
     Args:
         profile: AWS profile to use (defaults to PROFILE env var)
@@ -293,6 +560,46 @@ def run_aws_sso_login(profile: str | None = None) -> int:
     cmd = ["aws", "sso", "login", "--profile", profile]
     print(f"[sso-watcher] running: {' '.join(cmd)} (timeout={SSO_LOGIN_TIMEOUT}s)", flush=True)
 
+    # Create a temp script that opens URLs with tab reuse
+    browser_script = STATE_DIR / "open-sso-url.sh"
+    try:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        browser_script.write_text(
+            '#!/bin/bash\n'
+            # Use osascript inline for tab reuse; fall back to open
+            'URL="$1"\n'
+            'osascript -e "\n'
+            'tell application \\"System Events\\"\n'
+            '  if exists process \\"Google Chrome\\" then\n'
+            '    tell application \\"Google Chrome\\"\n'
+            '      repeat with w in windows\n'
+            '        set i to 0\n'
+            '        repeat with t in tabs of w\n'
+            '          set i to i + 1\n'
+            '          if URL of t contains \\"device.sso\\" or URL of t contains \\".amazonaws.com/authorize\\" or URL of t contains \\"awsapps.com\\" then\n'
+            '            set URL of t to \\"\'$URL\'\\"\n'
+            '            set active tab index of w to i\n'
+            '            set index of w to 1\n'
+            '            activate\n'
+            '            return\n'
+            '          end if\n'
+            '        end repeat\n'
+            '      end repeat\n'
+            '      tell window 1 to make new tab with properties {URL:\\"\'$URL\'\\"}\n'
+            '      activate\n'
+            '    end tell\n'
+            '    return\n'
+            '  end if\n'
+            'end tell\n'
+            'open location \\"\'$URL\'\\"\n'
+            '" 2>/dev/null || open "$URL"\n'
+        )
+        browser_script.chmod(0o755)
+        env = {**os.environ, "BROWSER": str(browser_script)}
+    except Exception:
+        # Fall back to default browser behavior
+        env = None
+
     try:
         proc = subprocess.run(
             cmd,
@@ -300,6 +607,7 @@ def run_aws_sso_login(profile: str | None = None) -> int:
             stderr=subprocess.STDOUT,
             text=True,
             timeout=SSO_LOGIN_TIMEOUT,
+            env=env,
         )
         print(proc.stdout, flush=True)
         return proc.returncode
@@ -331,8 +639,15 @@ def handle_login(profile: str) -> str:
     """
     Handle the login flow based on configured mode.
 
-    In "notify" mode: shows dialog with Refresh/Snooze/Don't Remind options.
-    In "auto" mode: runs aws sso login immediately.
+    All modes except standalone try silent token refresh first.
+    If silent refresh succeeds, returns "success" without any user
+    interaction. Otherwise falls back to mode-specific behavior.
+
+    Modes:
+    - notify: silent refresh → dialog → browser login
+    - auto: silent refresh → browser login (no dialog)
+    - silent: silent refresh only, no browser
+    - standalone: should not reach here
 
     Args:
         profile: AWS profile to login with
@@ -350,6 +665,15 @@ def handle_login(profile: str) -> str:
     if mode == "standalone":
         # Should not reach here, but guard anyway
         return "dismiss"
+
+    # Try silent refresh first (all active modes)
+    if try_silent_refresh(profile):
+        return "success"
+
+    # Silent mode: no browser fallback
+    if mode == "silent":
+        print("[sso-watcher] silent refresh failed, no browser fallback in silent mode", flush=True)
+        return "failed"
 
     if mode == "notify":
         print(f"[sso-watcher] showing notification dialog for {profile}", flush=True)

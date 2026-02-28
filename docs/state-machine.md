@@ -4,30 +4,39 @@ Formal state descriptions for the SSO watcher system. Designed for both human re
 
 ## Watcher Modes
 
-Three modes, switchable at runtime without restart via `mise run sso-mode:*`.
+Four modes, switchable at runtime without restart via `mise run sso-mode:*`.
 
 ```mermaid
 stateDiagram-v2
     direction LR
     [*] --> notify : default
     notify --> auto : sso-mode auto
-    auto --> notify : sso-mode notify
+    notify --> silent : sso-mode silent
     notify --> standalone : sso-mode standalone
-    standalone --> notify : sso-mode notify
+    auto --> notify : sso-mode notify
+    auto --> silent : sso-mode silent
     auto --> standalone : sso-mode standalone
+    silent --> notify : sso-mode notify
+    silent --> auto : sso-mode auto
+    silent --> standalone : sso-mode standalone
+    standalone --> notify : sso-mode notify
     standalone --> auto : sso-mode auto
+    standalone --> silent : sso-mode silent
 ```
 
 ## Notify Mode Flow
 
-Default mode. Shows macOS dialog before login.
+Default mode. Tries silent refresh first, then shows macOS dialog.
 
 ```mermaid
 stateDiagram-v2
     direction TB
     [*] --> polling
 
-    polling --> dialog : signal + no cooldown + no snooze
+    polling --> silent_refresh : signal + no cooldown + no snooze
+    silent_refresh --> polling : success, clears signal + writes cooldown
+
+    silent_refresh --> dialog : failed
 
     state dialog {
         direction LR
@@ -49,15 +58,30 @@ stateDiagram-v2
 
 ## Auto Mode Flow
 
-Opens browser immediately on signal, no dialog.
+Tries silent refresh first, then opens browser immediately. No dialog.
 
 ```mermaid
 stateDiagram-v2
     direction LR
     [*] --> polling
-    polling --> login : signal + no cooldown + no snooze
+    polling --> silent_refresh : signal + no cooldown + no snooze
+    silent_refresh --> polling : success, clears signal + writes cooldown
+    silent_refresh --> login : failed
     login --> polling : exit 0, clears signal + writes cooldown
     login --> polling : nonzero or timeout, writes 30s snooze
+```
+
+## Silent Mode Flow
+
+Tries silent token refresh only. Never opens browser.
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> polling
+    polling --> silent_refresh : signal + no cooldown + no snooze
+    silent_refresh --> polling : success, clears signal + writes cooldown
+    silent_refresh --> polling : failed, writes 30s snooze
 ```
 
 ## Standalone Mode
@@ -142,12 +166,14 @@ polling              | signal + cooldown active           | sleep               
 polling              | signal + snooze active             | sleep                         | polling
 polling              | signal + lock held                 | sleep                         | polling
 polling              | signal + ready + lock acquired     | handle_login                  | handling
-handling (notify)    | dialog > refresh > exit 0          | clear signal, write cooldown  | polling
-handling (notify)    | dialog > refresh > nonzero         | write 30s snooze to signal    | polling
-handling (notify)    | dialog > snooze                    | write snooze to signal        | polling
-handling (notify)    | dialog > suppress                  | clear signal, write cooldown  | polling
-handling (notify)    | dialog > dismiss/timeout           | write cooldown                | polling
-handling (auto)      | login > exit 0                     | clear signal, write cooldown  | polling
-handling (auto)      | login > nonzero                    | write 30s snooze to signal    | polling
+handling (any)       | silent refresh succeeds            | clear signal, write cooldown  | polling
+handling (notify)    | silent fail > dialog > refresh > 0 | clear signal, write cooldown  | polling
+handling (notify)    | silent fail > dialog > refresh > !0| write 30s snooze to signal    | polling
+handling (notify)    | silent fail > dialog > snooze      | write snooze to signal        | polling
+handling (notify)    | silent fail > dialog > suppress    | clear signal, write cooldown  | polling
+handling (notify)    | silent fail > dialog > dismiss     | write cooldown                | polling
+handling (auto)      | silent fail > login > exit 0       | clear signal, write cooldown  | polling
+handling (auto)      | silent fail > login > nonzero      | write 30s snooze to signal    | polling
+handling (silent)    | silent fail                        | write 30s snooze to signal    | polling
 standalone           | any                                | sleep                         | standalone
 ```

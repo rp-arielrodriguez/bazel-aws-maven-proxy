@@ -80,7 +80,7 @@ aws sso logout 2>/dev/null || true
 rm -f "$SIGNAL_DIR/last-login-at.txt" 2>/dev/null || true
 
 echo "✓ Logged out — credentials invalidated"
-if [ "$MODE" = "standalone" ]; then
+if [ "$MODE" = "standalone" ] || [ "$MODE" = "silent" ]; then
   echo "  Login again with: mise run sso-login"
 else
   echo "  Monitor will detect expiry within ${CHECK_INTERVAL:-60}s"
@@ -104,8 +104,8 @@ else
   MODE="${SSO_LOGIN_MODE:-notify}"
 fi
 
-if [ "$MODE" = "standalone" ]; then
-  echo "Mode: standalone — running aws sso login directly"
+if [ "$MODE" = "standalone" ] || [ "$MODE" = "silent" ]; then
+  echo "Mode: $MODE — running aws sso login directly"
   aws sso login --profile "$AWS_PROFILE"
   echo "✓ Login complete"
 else
@@ -146,6 +146,7 @@ fi
 case "$MODE" in
   standalone) DESC="idle, manual login only" ;;
   auto)       DESC="opens browser on expiry" ;;
+  silent)     DESC="token refresh only, no browser" ;;
   notify)     DESC="asks before opening browser" ;;
   *)          DESC="unknown" ;;
 esac
@@ -155,9 +156,10 @@ echo ""
 echo "Available modes:"
 echo "  notify      asks before opening browser (default)"
 echo "  auto        opens browser immediately on expiry"
+echo "  silent      token refresh only, no browser"
 echo "  standalone  watcher idle, manual login only"
 echo ""
-echo "Switch with: mise run sso-mode:notify|auto|standalone"
+echo "Switch with: mise run sso-mode:notify|auto|silent|standalone"
 """
 
 [tasks."sso-mode:notify"]
@@ -174,6 +176,14 @@ run = """
 mkdir -p "$HOME/.aws/sso-renewer"
 echo "auto" > "$HOME/.aws/sso-renewer/mode"
 echo "✓ Switched to auto mode (takes effect within ${SSO_POLL_SECONDS:-5}s)"
+"""
+
+[tasks."sso-mode:silent"]
+description = "Switch watcher to silent mode (token refresh only, no browser)"
+run = """
+mkdir -p "$HOME/.aws/sso-renewer"
+echo "silent" > "$HOME/.aws/sso-renewer/mode"
+echo "✓ Switched to silent mode — refresh token only, no browser (takes effect within ${SSO_POLL_SECONDS:-5}s)"
 """
 
 [tasks."sso-mode:standalone"]
