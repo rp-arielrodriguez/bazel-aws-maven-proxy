@@ -2,20 +2,17 @@
 
 Host-side daemon for AWS SSO credential management on macOS.
 
-## Quick Start
-
-See [QUICKSTART_SSO_WATCHER.md](QUICKSTART_SSO_WATCHER.md) for setup instructions.
-
 ## Architecture
 
 ```
-SSO Monitor (Container) checks credentials
+SSO Monitor (Container) checks credentials every 60s
        ↓ detects expiration
 Writes signal → ~/.aws/sso-renewer/login-required.json
        ↓ polls every 5s
 SSO Watcher (launchd) detects signal
-       ↓ notify mode (default): Refresh/Snooze/Don't Remind
-       ↓ auto mode: proceeds immediately
+       ↓ notify mode: Refresh/Snooze/Don't Remind
+       ↓ auto mode: opens browser immediately
+       ↓ standalone mode: idle (manual only)
 aws sso login opens browser
        ↓ user completes MFA
 New credentials → ~/.aws/sso/cache/*.json
@@ -45,22 +42,19 @@ Host daemon (launchd user agent) that:
 - In `auto` mode: runs login immediately (opens browser)
 - In `standalone` mode: watcher idles, manual `mise run sso-login` only
 - Uses atomic directory locking (`mkdir`)
-- Cooldown (default 600s) prevents popup spam
-- Runs `aws sso login --profile <profile>`
-- Clears signal on success, keeps on failure for retry
-- Login timeout: 120s (prevents hanging if browser tab closed)
+- Cooldown (default 600s) prevents popup spam after dismiss
+- Runs `aws sso login --profile <profile>` with 120s timeout
+- Clears signal on success, keeps on failure (retries in ~30s)
 
-#### Dialog Actions Quick Reference
+### Dialog Actions Quick Reference
 
-| Action | Signal | Next dialog |
+| Action | Signal | Next attempt |
 |--------|--------|-------------|
 | **Refresh** → success | cleared | on next credential expiry |
 | **Refresh** → timeout/fail | kept | ~30s (auto-retry) |
 | **Snooze** | kept | user-chosen (15m/30m/1h/4h) |
 | **Dismiss** / ignore (120s timeout) | kept | ~10 min (cooldown) |
 | **Don't Remind** | cleared | only on new expiry signal |
-
-To force login anytime: `mise run sso-login`
 
 ### `launchd/com.bazel.sso-watcher.plist`
 
@@ -87,7 +81,7 @@ macOS launchd configuration with:
 ```bash
 # Configure in .env
 AWS_PROFILE=bazel-cache
-SSO_COOLDOWN_SECONDS=60
+SSO_COOLDOWN_SECONDS=600
 SSO_POLL_SECONDS=5
 
 # Install (idempotent)
@@ -100,6 +94,24 @@ mise run sso-status
 mise run sso-logs
 ```
 
+## Commands
+
+```bash
+mise run sso-install          # Install watcher (launchd agent)
+mise run sso-uninstall        # Uninstall
+mise run sso-status           # Dashboard: running, mode, credentials
+mise run sso-login            # Trigger login (dialog or direct per mode)
+mise run sso-logout           # Invalidate credentials, trigger renewal
+mise run sso-logs             # Show recent logs (last 50 lines)
+mise run sso-logs:follow      # Stream logs (Ctrl+C to stop)
+mise run sso-mode             # Show current mode
+mise run sso-mode:notify      # Switch to notify (dialog)
+mise run sso-mode:auto        # Switch to auto (browser immediately)
+mise run sso-mode:standalone  # Switch to standalone (manual only)
+mise run sso-restart          # Restart watcher
+mise run sso-clean            # Clear state/signals
+```
+
 ## Configuration
 
 All settings via `.env`:
@@ -107,11 +119,13 @@ All settings via `.env`:
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `AWS_PROFILE` | AWS CLI profile | `default` |
-| `SSO_LOGIN_MODE` | `notify` (ask user) or `auto` (open browser immediately) | `notify` |
-| `SSO_COOLDOWN_SECONDS` | Cooldown between logins | `600` |
-| `SSO_POLL_SECONDS` | Signal poll interval | `5` |
+| `SSO_LOGIN_MODE` | `notify`, `auto`, or `standalone` | `notify` |
+| `SSO_COOLDOWN_SECONDS` | Cooldown between logins (seconds) | `600` |
+| `SSO_POLL_SECONDS` | Signal poll interval (seconds) | `5` |
 
-After changing `.env`, run `mise run sso-install` to apply (idempotent).
+After changing `.env`, run `mise run sso-install` to apply.
+
+Runtime mode toggle: `mise run sso-mode:notify|auto|standalone` — takes effect within seconds, no restart needed.
 
 ## Implementation Details
 
@@ -136,19 +150,21 @@ if time.time() - last_login < COOLDOWN_SECONDS:
     return  # Skip, too soon
 ```
 
-Prevents repeated popups if user ignores or login fails repeatedly.
+Cooldown is written on dismiss only. On login failure/timeout, a 30s snooze is written to the signal file instead, allowing quick retry.
 
 ### State Management
 
 - **Signal file**: Written by monitor, read/updated by watcher (snooze writes `nextAttemptAfter`)
 - **Lock directory**: Created on login attempt, removed on completion
-- **Cooldown timestamp**: Written on login attempt, checked before next
+- **Cooldown timestamp**: Written on dismiss, checked before next attempt
+- **Mode file**: Written by `mise run sso-mode:*`, read by watcher every poll cycle
 
 Shared directory: `~/.aws/sso-renewer/`
 
 ### Error Handling
 
-- **Login failure**: Signal kept, retry after cooldown
+- **Login failure**: Signal kept, 30s snooze for quick retry
+- **Login timeout (120s)**: Same as failure — signal kept, 30s snooze
 - **Snooze**: Signal updated with `nextAttemptAfter`, retry after snooze expires
 - **Suppress (Don't Remind)**: Signal cleared, no retry until new signal
 - **Profile not found**: Logs error, keeps signal
@@ -160,43 +176,30 @@ Shared directory: `~/.aws/sso-renewer/`
 ### Watcher not starting
 
 ```bash
-# Check status
-mise run sso-status
-
-# View logs
-cat ~/Library/Logs/sso-watcher.log
-
-# Reinstall
-mise run sso-uninstall
-mise run sso-install
+mise run sso-status         # Check installed/running/mode
+mise run sso-logs           # View recent logs
+mise run sso-uninstall && mise run sso-install  # Reinstall
 ```
 
 ### Browser not opening
 
-- Check `SSO_LOGIN_MODE` — if `notify`, you must click "Refresh" in the dialog
-- Check `PATH` in plist includes AWS CLI location
+- Check mode: `mise run sso-mode` — in `notify` mode, you must click "Refresh"
+- In `standalone` mode, watcher is idle — use `mise run sso-login` directly
 - Verify profile exists: `aws configure list-profiles`
-- Check cooldown not active: `cat ~/.aws/sso-renewer/last-login-at.txt`
+- Check `PATH` in plist includes AWS CLI location
 
 ### Signal file stuck
 
 ```bash
-# Clean state
-mise run sso-clean
-
-# Check monitor is running (use your engine)
-podman compose ps sso-monitor   # or: docker compose ps sso-monitor
-
-# View monitor logs
-podman compose logs sso-monitor  # or: docker compose logs sso-monitor
+mise run sso-clean                    # Clear state
+mise run containers:logs              # Check monitor is running
 ```
 
 ### Multiple login popups
 
-- Switch to `notify` mode (`SSO_LOGIN_MODE=notify` in `.env`) — browser only opens on user confirmation
+- Use `notify` mode (default) — browser only opens on user confirmation
 - Increase `SSO_COOLDOWN_SECONDS` in `.env`
-- Run `mise run sso-install` to apply
-- Current cooldown shown in logs: `cooldown=600s`
+- Or switch to `standalone` for full manual control
 
 ## Security
 
@@ -206,16 +209,3 @@ podman compose logs sso-monitor  # or: docker compose logs sso-monitor
 - **User agent**: Runs as user, not root
 - **Lock prevents concurrency**: Single login at a time
 - **Cooldown prevents abuse**: Rate limiting built-in
-
-## System Integration
-
-Works with container-based SSO monitor (Podman or Docker):
-- Monitor detects expired credentials in container
-- Writes signal to shared volume
-- Watcher on host detects signal
-- In `notify` mode: shows dialog, user confirms
-- In `auto` mode: triggers login immediately
-- Browser opens for user authentication
-- Both containers reload credentials automatically
-
-No container restarts needed.

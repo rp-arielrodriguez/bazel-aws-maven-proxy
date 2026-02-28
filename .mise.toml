@@ -45,25 +45,77 @@ description = "Restart SSO watcher launchd agent"
 run = "bash scripts/sso-restart.sh"
 
 [tasks.sso-logs]
-description = "Tail SSO watcher logs"
-run = "bash scripts/sso-logs.sh"
+description = "Show recent SSO watcher logs (default 50 lines)"
+run = "bash scripts/sso-logs.sh {{arg(name=\"lines\", default=\"50\")}}"
+
+[tasks."sso-logs:follow"]
+description = "Stream SSO watcher logs (Ctrl+C to stop)"
+run = """
+LOG_FILE="$HOME/Library/Logs/sso-watcher.log"
+ERROR_LOG="$HOME/Library/Logs/sso-watcher.error.log"
+echo "Streaming SSO watcher logs (Ctrl+C to exit)..."
+trap 'exit 0' INT TERM
+tail -f "$LOG_FILE" "$ERROR_LOG" 2>/dev/null &
+wait $!
+"""
+
+[tasks.sso-logout]
+description = "Logout from AWS SSO (invalidates credentials, triggers renewal)"
+run = """
+if [ -f .env ]; then source .env; fi
+AWS_PROFILE="${AWS_PROFILE:-default}"
+SIGNAL_DIR="$HOME/.aws/sso-renewer"
+
+MODE_FILE="$SIGNAL_DIR/mode"
+if [ -f "$MODE_FILE" ]; then
+  MODE=$(tr -d '[:space:]' < "$MODE_FILE")
+else
+  MODE="${SSO_LOGIN_MODE:-notify}"
+fi
+
+echo "Logging out from AWS SSO (profile: $AWS_PROFILE)..."
+aws sso logout 2>/dev/null || true
+
+# Clear cooldown so watcher reacts immediately when monitor detects expiry
+rm -f "$SIGNAL_DIR/last-login-at.txt" 2>/dev/null || true
+
+echo "✓ Logged out — credentials invalidated"
+if [ "$MODE" = "standalone" ]; then
+  echo "  Login again with: mise run sso-login"
+else
+  echo "  Monitor will detect expiry within ${CHECK_INTERVAL:-60}s"
+fi
+"""
 
 [tasks.sso-login]
-description = "Trigger SSO login (creates signal to wake the watcher)"
+description = "Trigger SSO login (signal watcher or run directly in standalone mode)"
 run = """
 # Load .env to get correct AWS_PROFILE
 if [ -f .env ]; then source .env; fi
 SIGNAL_DIR="$HOME/.aws/sso-renewer"
 SIGNAL_FILE="$SIGNAL_DIR/login-required.json"
+MODE_FILE="$SIGNAL_DIR/mode"
 AWS_PROFILE="${AWS_PROFILE:-default}"
 
-# Clear cooldown so dialog shows immediately
-rm -f "$SIGNAL_DIR/last-login-at.txt" 2>/dev/null || true
+# Read current mode
+if [ -f "$MODE_FILE" ]; then
+  MODE=$(tr -d '[:space:]' < "$MODE_FILE")
+else
+  MODE="${SSO_LOGIN_MODE:-notify}"
+fi
 
-echo "Creating signal file..."
-mkdir -p "$SIGNAL_DIR"
+if [ "$MODE" = "standalone" ]; then
+  echo "Mode: standalone — running aws sso login directly"
+  aws sso login --profile "$AWS_PROFILE"
+  echo "✓ Login complete"
+else
+  # Clear cooldown so dialog shows immediately
+  rm -f "$SIGNAL_DIR/last-login-at.txt" 2>/dev/null || true
 
-cat > "$SIGNAL_FILE" << EOF
+  echo "Creating signal file..."
+  mkdir -p "$SIGNAL_DIR"
+
+  cat > "$SIGNAL_FILE" << EOF
 {
   "profile": "$AWS_PROFILE",
   "reason": "Manual trigger via mise run sso-login",
@@ -71,8 +123,13 @@ cat > "$SIGNAL_FILE" << EOF
 }
 EOF
 
-echo "✓ Signal created, watcher will show login dialog within 5 seconds."
-echo "  Check logs: mise run sso-logs"
+  if [ "$MODE" = "auto" ]; then
+    echo "✓ Signal created, watcher will open browser within ${SSO_POLL_SECONDS:-5}s"
+  else
+    echo "✓ Signal created, watcher will show dialog within ${SSO_POLL_SECONDS:-5}s"
+  fi
+  echo "  Check logs: mise run sso-logs"
+fi
 """
 
 [tasks.sso-mode]
@@ -81,17 +138,24 @@ run = """
 MODE_FILE="$HOME/.aws/sso-renewer/mode"
 if [ -f "$MODE_FILE" ]; then
   MODE=$(cat "$MODE_FILE" | tr -d '[:space:]')
-  echo "Current mode: $MODE (from state file)"
 else
   if [ -f .env ]; then source .env; fi
   MODE="${SSO_LOGIN_MODE:-notify}"
-  echo "Current mode: $MODE (from env/default, no state file)"
 fi
+
+case "$MODE" in
+  standalone) DESC="idle, manual login only" ;;
+  auto)       DESC="opens browser on expiry" ;;
+  notify)     DESC="asks before opening browser" ;;
+  *)          DESC="unknown" ;;
+esac
+
+echo "Current mode: $MODE — $DESC"
 echo ""
 echo "Available modes:"
-echo "  notify     - Show dialog before login (default)"
-echo "  auto       - Open browser immediately"
-echo "  standalone - Watcher idle, manual login only"
+echo "  notify      asks before opening browser (default)"
+echo "  auto        opens browser immediately on expiry"
+echo "  standalone  watcher idle, manual login only"
 echo ""
 echo "Switch with: mise run sso-mode:notify|auto|standalone"
 """

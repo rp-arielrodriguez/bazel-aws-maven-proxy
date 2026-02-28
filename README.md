@@ -18,58 +18,35 @@ This project provides a stable HTTP endpoint for Bazel while handling AWS S3 aut
 
 Three-component automated system:
 
-1. **S3 Proxy Service** (Container) - HTTP server that caches and serves Maven artifacts from S3
-2. **SSO Monitor Service** (Container) - Continuously checks credentials and writes signal files
-3. **SSO Watcher** (Host) - Watches for signals, notifies user, and triggers login on confirmation
-
-### Automated Workflow
+1. **S3 Proxy Service** (Container) — HTTP server that caches and serves Maven artifacts from S3
+2. **SSO Monitor Service** (Container) — Checks credentials periodically, writes signal on expiry
+3. **SSO Watcher** (Host) — Watches for signals, notifies user, triggers login
 
 ```
-SSO Monitor (Container) checks credentials every 60s
+SSO Monitor checks credentials every 60s
        ↓ detects expiration
-Writes signal → ~/.aws/sso-renewer/login-required.json (shared volume)
+Writes signal → ~/.aws/sso-renewer/login-required.json
        ↓ watcher polls every 5s
-SSO Watcher (launchd on host) detects signal
-       ↓ notify mode (default): shows dialog (Refresh/Snooze/Don't Remind)
-       ↓ auto mode: opens browser immediately
-aws sso login opens browser for auth + MFA
-       ↓ user completes
-New credentials → ~/.aws/sso/cache/*.json
-       ↓ both containers detect
-S3 Proxy + Monitor reload credentials (no restart)
+SSO Watcher (launchd) detects signal
+       ↓ notify: dialog | auto: browser | standalone: idle
+aws sso login → browser → user completes MFA
        ↓
-Builds continue automatically
+S3 Proxy + Monitor reload credentials (no restart)
 ```
 
-Install watcher: `mise run sso-install` (macOS only)
-
-See [SSO_WATCHER.md](SSO_WATCHER.md) for details.
+See [docs/sso-watcher.md](docs/sso-watcher.md) for details.
 
 ## Quick Start
 
 ### Prerequisites
 
 - Podman (preferred) or Docker
-- AWS CLI
+- AWS CLI v2
 - Python 3.11+
-- mise (optional but recommended - `brew install mise`)
+- mise (`brew install mise`)
 
-### 1. Install dependencies
+### 1. Configure AWS CLI with SSO
 
-```bash
-# Using mise (recommended)
-mise install python
-pip install boto3
-
-# Or system Python
-pip3 install boto3
-```
-
-### 2. Configure AWS CLI v2 with SSO
-
-**IMPORTANT:** Requires AWS CLI v2 with SSO session config (not credentials file).
-
-**Option A: Interactive setup (recommended)**
 ```bash
 # Create SSO session
 aws configure sso-session
@@ -78,17 +55,11 @@ aws configure sso-session
 # SSO region: us-west-2
 # SSO registration scopes: sso:account:access
 
-# Create profile pointing to session
+# Create profile
 aws configure sso --profile bazel-cache
-# SSO session name: my-sso
-# Account ID: 123456789012
-# Role name: DeveloperRole
-# Region: us-west-2
 ```
 
-**Option B: Manual config**
-
-Add to `~/.aws/config`:
+Or manually add to `~/.aws/config`:
 ```ini
 [profile bazel-cache]
 sso_session = my-sso
@@ -102,34 +73,29 @@ sso_region = us-west-2
 sso_registration_scopes = sso:account:access
 ```
 
-Do NOT use `~/.aws/credentials` file - SSO tokens managed by AWS CLI.
+Do NOT use `~/.aws/credentials` — SSO tokens are managed by AWS CLI.
 
-### 3. Set up environment
+### 2. Set up environment
 
 ```bash
 cp .env.example .env
-# Edit .env with your settings:
+# Edit .env:
 #   AWS_PROFILE=bazel-cache
 #   AWS_REGION=us-west-2
 #   S3_BUCKET_NAME=your-maven-bucket
-#   PROXY_PORT=9000
 ```
 
-### 4. Start services
+### 3. Start services
 
-**Option A: Start everything with mise (recommended for macOS)**
 ```bash
-mise run start  # Starts Docker services + SSO watcher
+# Everything (containers + SSO watcher)
+mise run start
+
+# Or containers only
+mise run containers:up
 ```
 
-**Option B: Start container services only**
-```bash
-mise run containers:up  # auto-detects podman or docker
-```
-
-### 5. Configure Bazel
-
-In your Bazel project:
+### 4. Configure Bazel
 
 **.bazelrc**:
 ```
@@ -150,213 +116,129 @@ maven_install(
 )
 ```
 
-## Usage
-
-### Automated Monitoring (macOS)
-
-The SSO watcher runs as a launchd service with three modes:
-- **notify** (default): shows macOS dialog with Refresh/Snooze/Don't Remind
-- **auto**: opens browser immediately when credentials expire
-- **standalone**: watcher idle, manual `mise run sso-login` only
-
-Switch modes at runtime with `mise run sso-mode:notify|auto|standalone` — takes effect within seconds, no restart needed.
-
-```bash
-# Install watcher (runs in background)
-mise run sso-install
-
-# Check status
-mise run sso-status
-
-# View logs
-mise run sso-logs
-
-# Restart watcher
-mise run sso-restart
-
-# Uninstall
-mise run sso-uninstall
-```
-
-In `notify` mode (default), the watcher shows a dialog with Refresh/Snooze/Don't Remind options. In `auto` mode it opens the browser immediately.
-
-## How It Works
-
-### S3 Proxy Service
-
-- Flask HTTP server on configurable port (default: 9000)
-- Caches Maven artifacts locally (container volume)
-- On cache miss, fetches from S3 using AWS credentials
-- Periodically refreshes credentials (every 60 seconds by default)
-- Health check endpoint: `/healthz`
-
-### SSO Monitor Tool
-
-- **Primary check**: `boto3.client('sts').get_caller_identity()`
-  - Authoritative - directly tests AWS API access
-  - Returns success if credentials valid
-  - Returns error if expired/invalid
-
-- **Secondary check** (with `--proactive`):
-  - Parses `~/.aws/sso/cache/*.json`
-  - Extracts `expiresAt` timestamp
-  - Warns if expiring soon
-
-- **Login trigger**:
-  - In `notify` mode (default): shows macOS dialog, waits for user confirmation
-  - In `auto` mode: proceeds immediately
-  - Runs `aws sso login --profile <profile>` subprocess
-  - Opens browser for SSO authentication
-  - Respects MFA requirements
-  - No credential manipulation
-
-## Configuration
-
-Environment variables (`.env` file):
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `AWS_PROFILE` | AWS CLI profile to use | `default` |
-| `AWS_REGION` | AWS region for S3 bucket | `us-west-2` |
-| `S3_BUCKET_NAME` | Maven S3 bucket name | Required |
-| `PROXY_PORT` | Local proxy port | `9000` |
-| `REFRESH_INTERVAL` | Credential refresh check (ms) | `60000` |
-| `LOG_LEVEL` | Logging level | `info` |
-| `CHECK_INTERVAL` | SSO monitor check interval (seconds) | `60` |
-| `SSO_COOLDOWN_SECONDS` | Watcher cooldown between logins | `600` |
-| `SSO_POLL_SECONDS` | Watcher signal file poll interval | `5` |
-| `SSO_LOGIN_MODE` | `notify`, `auto`, or `standalone` (toggleable via `mise run sso-mode:*`) | `notify` |
-| `CONTAINER_ENGINE` | `podman` or `docker` (auto-detect if unset) | auto-detect |
-
 ## Commands
 
-### Complete System (mise)
+### System
 
 ```bash
-# Start everything (containers + SSO watcher)
-mise run start
-
-# Stop everything
-mise run stop
-
-# View container logs
-mise run containers:logs
-
-# View SSO watcher logs
-mise run sso-logs
+mise run start              # Start everything (containers + watcher)
+mise run stop               # Stop everything
 ```
 
 ### Container Services
 
-Supports both Podman (preferred) and Docker. Auto-detected, or set `CONTAINER_ENGINE` in `.env`.
-
 ```bash
-# Using mise (recommended, engine-agnostic)
-mise run containers:up
-mise run containers:logs
-mise run containers:down
-mise run containers:restart
-
-# Or directly with your engine
-podman compose up -d    # Podman
-docker compose up -d    # Docker
+mise run containers:up      # Start containers
+mise run containers:down    # Stop containers
+mise run containers:restart # Restart containers
+mise run containers:logs    # View container logs
 ```
+
+Supports Podman (preferred) and Docker. Auto-detected, or set `CONTAINER_ENGINE` in `.env`.
 
 ### SSO Watcher (macOS)
 
 ```bash
-mise run sso-install     # Install watcher
-mise run sso-login       # Trigger login manually
-mise run sso-mode        # Show current mode
-mise run sso-mode:notify # Switch to notify (dialog)
-mise run sso-mode:auto   # Switch to auto (browser immediately)
+mise run sso-install          # Install watcher (launchd agent)
+mise run sso-uninstall        # Uninstall
+mise run sso-status           # Dashboard: running, mode, credentials
+mise run sso-login            # Trigger login (dialog or direct per mode)
+mise run sso-logout           # Invalidate credentials, trigger renewal
+mise run sso-logs             # Show recent logs (last 50 lines)
+mise run sso-logs:follow      # Stream logs (Ctrl+C to stop)
+mise run sso-mode             # Show current mode
+mise run sso-mode:notify      # Switch to notify (dialog)
+mise run sso-mode:auto        # Switch to auto (browser immediately)
 mise run sso-mode:standalone  # Switch to standalone (manual only)
-mise run sso-status      # Check launchd status
-mise run sso-logs        # View logs
-mise run sso-restart     # Restart watcher
-mise run sso-clean       # Clear state/signals
-mise run sso-uninstall   # Uninstall
+mise run sso-restart          # Restart watcher
+mise run sso-clean            # Clear state/signals
 ```
+
+### Watcher Modes
+
+| Mode | Behavior | Best for |
+|------|----------|----------|
+| `notify` (default) | Shows dialog: Refresh / Snooze / Don't Remind | Daily use |
+| `auto` | Opens browser immediately on expiry | Unattended |
+| `standalone` | Watcher idle, manual `sso-login` only | Full control |
+
+Switch at runtime: `mise run sso-mode:notify|auto|standalone` — takes effect within seconds.
 
 ### Dialog Actions Quick Reference
 
-| Action | Signal | Next dialog |
+| Action | Signal | Next attempt |
 |--------|--------|-------------|
 | **Refresh** → success | cleared | on next credential expiry |
 | **Refresh** → timeout/fail | kept | ~30s (auto-retry) |
 | **Snooze** | kept | user-chosen (15m/30m/1h/4h) |
-| **Dismiss** / ignore (120s timeout) | kept | ~10 min (cooldown) |
+| **Dismiss** / ignore | kept | ~10 min (cooldown) |
 | **Don't Remind** | cleared | only on new expiry signal |
 
-To force login anytime: `mise run sso-login`
+## Configuration
 
+Environment variables in `.env`:
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `AWS_PROFILE` | AWS CLI profile | `default` |
+| `AWS_REGION` | AWS region for S3 | `us-west-2` |
+| `S3_BUCKET_NAME` | Maven S3 bucket name | Required |
+| `PROXY_PORT` | Local proxy port | `9000` |
+| `REFRESH_INTERVAL` | Credential refresh check (ms) | `60000` |
+| `LOG_LEVEL` | Logging level | `info` |
+| `CHECK_INTERVAL` | Monitor check interval (seconds) | `60` |
+| `SSO_COOLDOWN_SECONDS` | Watcher cooldown between logins | `600` |
+| `SSO_POLL_SECONDS` | Watcher signal poll interval | `5` |
+| `SSO_LOGIN_MODE` | `notify`, `auto`, or `standalone` | `notify` |
+| `CONTAINER_ENGINE` | `podman` or `docker` | auto-detect |
 
 ## Troubleshooting
 
 ### Port conflicts
 
-Check if port is available:
 ```bash
 lsof -i :9000
-```
-
-Change port in `.env`:
-```
-PROXY_PORT=8888
+# Change in .env: PROXY_PORT=8888
 ```
 
 ### Expired credentials
 
-Manual login:
 ```bash
-aws sso login --profile bazel-cache
-mise run containers:restart  # or: podman compose restart s3proxy
+mise run sso-login            # Trigger login
+mise run sso-logout           # Force re-auth
+aws sso login --profile bazel-cache  # Manual fallback
 ```
 
-### S3 access issues
-
-Verify AWS credentials work:
-```bash
-aws s3 ls s3://your-bucket-name/ --profile bazel-cache
-```
-
-### Watcher not triggering
-
-Check watcher logs:
-```bash
-mise run sso-logs
-```
-
-Verify configuration:
-```bash
-mise run sso-status
-```
-
-Check container logs:
-```bash
-mise run containers:logs  # or: podman compose logs s3proxy
-```
-
-## macOS Support
-
-Fully supported on macOS. Install dependencies:
+### Watcher issues
 
 ```bash
-# Using Homebrew
-brew install awscli
-
-# Using mise
-mise install python@3.11
-pip3 install boto3
+mise run sso-status           # Check running/mode/credentials
+mise run sso-logs             # View recent logs
+mise run sso-clean            # Clear stuck state
 ```
+
+### S3 access
+
+```bash
+aws s3 ls s3://your-bucket/ --profile bazel-cache
+```
+
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [docs/sso-watcher.md](docs/sso-watcher.md) | SSO watcher architecture and internals |
+| [docs/testing.md](docs/testing.md) | Test structure and coverage (77 tests) |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute |
 
 ## Testing
 
-Run tests:
 ```bash
-pytest
-./run_tests.sh
+pytest              # Run all 77 tests
+./run_tests.sh      # Helper script
 ```
+
+See [docs/testing.md](docs/testing.md) for details.
 
 ## License
 
@@ -364,4 +246,4 @@ MIT License
 
 ## Contributing
 
-Contributions welcome. This is a focused tool - please keep changes simple and aligned with the core use case.
+See [CONTRIBUTING.md](CONTRIBUTING.md).

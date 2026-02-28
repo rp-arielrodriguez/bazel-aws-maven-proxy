@@ -32,20 +32,19 @@ podman compose down       # Stop services
 ### SSO Watcher Management (macOS)
 
 ```bash
-# Install watcher (runs at login)
-mise run sso-install
-
-# Check status
-mise run sso-status
-
-# View logs
-mise run sso-logs
-
-# Restart watcher
-mise run sso-restart
-
-# Uninstall
-mise run sso-uninstall
+mise run sso-install          # Install watcher (launchd agent)
+mise run sso-uninstall        # Uninstall
+mise run sso-status           # Dashboard: running, mode, credentials
+mise run sso-login            # Trigger login (dialog or direct per mode)
+mise run sso-logout           # Invalidate credentials, trigger renewal
+mise run sso-logs             # Show recent logs (last 50 lines)
+mise run sso-logs:follow      # Stream logs (Ctrl+C to stop)
+mise run sso-mode             # Show current mode
+mise run sso-mode:notify      # Switch to notify (dialog)
+mise run sso-mode:auto        # Switch to auto (browser immediately)
+mise run sso-mode:standalone  # Switch to standalone (manual only)
+mise run sso-restart          # Restart watcher
+mise run sso-clean            # Clear state/signals
 ```
 
 ### Configuration
