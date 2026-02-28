@@ -499,3 +499,179 @@ class TestModeManagement:
             assert watcher.handle_login("default") == "dismiss"
             mock_notify.assert_not_called()
             mock_login.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# State machine transition tests
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestStateMachineTransitions:
+    """
+    Tests verifying all transitions from docs/state-machine.md.
+    Each test maps to a row in the transition table.
+    """
+
+    # -- polling → polling (lock held by another instance) --
+
+    def test_lock_held_skips_login(self, watcher_state):
+        """polling + signal + ready + lock held → skip, stay polling."""
+        write_signal(watcher_state["signal_file"])
+        watcher_state["lock_dir"].mkdir()  # simulate held lock
+        with patch.object(watcher, 'read_mode', return_value='notify'), \
+             patch.object(watcher, 'POLL_SECONDS', 0), \
+             patch.object(watcher, 'COOLDOWN_SECONDS', 0), \
+             patch.object(watcher, 'show_notification') as mock_notify, \
+             patch.object(watcher, 'run_aws_sso_login') as mock_login, \
+             patch('time.sleep', side_effect=_stop_after(2)):
+            watcher.main()
+        mock_notify.assert_not_called()
+        mock_login.assert_not_called()
+        assert watcher_state["signal_file"].exists()
+
+    # -- auto mode: main loop integration --
+
+    def test_auto_mode_success_clears_signal(self, watcher_state):
+        """auto: signal → login success → signal cleared + cooldown written."""
+        write_signal(watcher_state["signal_file"], profile="auto-prof")
+        with patch.object(watcher, 'read_mode', return_value='auto'), \
+             patch.object(watcher, 'POLL_SECONDS', 0), \
+             patch.object(watcher, 'COOLDOWN_SECONDS', 0), \
+             patch.object(watcher, 'run_aws_sso_login', return_value=0) as mock_login, \
+             patch('time.sleep', side_effect=_stop_after(2)):
+            watcher.main()
+        mock_login.assert_called_once_with("auto-prof")
+        assert not watcher_state["signal_file"].exists()
+        assert watcher_state["last_run"].exists()
+
+    def test_auto_mode_failure_writes_30s_snooze(self, watcher_state):
+        """auto: signal → login failed → signal kept + 30s snooze."""
+        write_signal(watcher_state["signal_file"])
+        with patch.object(watcher, 'read_mode', return_value='auto'), \
+             patch.object(watcher, 'POLL_SECONDS', 0), \
+             patch.object(watcher, 'COOLDOWN_SECONDS', 0), \
+             patch.object(watcher, 'run_aws_sso_login', return_value=1), \
+             patch('time.sleep', side_effect=_stop_after(2)):
+            watcher.main()
+        assert watcher_state["signal_file"].exists()
+        data = json.loads(watcher_state["signal_file"].read_text())
+        assert data["nextAttemptAfter"] <= time.time() + 31
+        assert data["nextAttemptAfter"] > time.time() + 20
+
+    # -- notify mode: verify cooldown file written --
+
+    def test_success_writes_cooldown(self, watcher_state):
+        """notify: refresh success → last-login-at.txt written."""
+        write_signal(watcher_state["signal_file"])
+        with patch.object(watcher, 'read_mode', return_value='notify'), \
+             patch.object(watcher, 'POLL_SECONDS', 0), \
+             patch.object(watcher, 'COOLDOWN_SECONDS', 0), \
+             patch.object(watcher, 'show_notification', return_value="refresh"), \
+             patch.object(watcher, 'run_aws_sso_login', return_value=0), \
+             patch('time.sleep', side_effect=_stop_after(2)):
+            watcher.main()
+        assert watcher_state["last_run"].exists()
+        ts = float(watcher_state["last_run"].read_text().strip())
+        assert time.time() - ts < 5
+
+    def test_dismiss_writes_cooldown(self, watcher_state):
+        """notify: dismiss → last-login-at.txt written (cooldown to prevent spam)."""
+        write_signal(watcher_state["signal_file"])
+        with patch.object(watcher, 'read_mode', return_value='notify'), \
+             patch.object(watcher, 'POLL_SECONDS', 0), \
+             patch.object(watcher, 'COOLDOWN_SECONDS', 600), \
+             patch.object(watcher, 'show_notification', return_value="dismiss"), \
+             patch('time.sleep', side_effect=_stop_after(1)):
+            watcher.main()
+        assert watcher_state["last_run"].exists()
+
+    def test_suppress_writes_cooldown(self, watcher_state):
+        """notify: suppress → last-login-at.txt written."""
+        write_signal(watcher_state["signal_file"])
+        with patch.object(watcher, 'read_mode', return_value='notify'), \
+             patch.object(watcher, 'POLL_SECONDS', 0), \
+             patch.object(watcher, 'COOLDOWN_SECONDS', 600), \
+             patch.object(watcher, 'show_notification', return_value="suppress"), \
+             patch('time.sleep', side_effect=_stop_after(1)):
+            watcher.main()
+        assert watcher_state["last_run"].exists()
+
+    def test_failure_writes_30s_snooze_not_cooldown(self, watcher_state):
+        """notify: refresh fail → 30s snooze written, NO cooldown file."""
+        write_signal(watcher_state["signal_file"])
+        with patch.object(watcher, 'read_mode', return_value='notify'), \
+             patch.object(watcher, 'POLL_SECONDS', 0), \
+             patch.object(watcher, 'COOLDOWN_SECONDS', 0), \
+             patch.object(watcher, 'show_notification', return_value="refresh"), \
+             patch.object(watcher, 'run_aws_sso_login', return_value=1), \
+             patch('time.sleep', side_effect=_stop_after(2)):
+            watcher.main()
+        # 30s snooze written
+        data = json.loads(watcher_state["signal_file"].read_text())
+        assert "nextAttemptAfter" in data
+        # No cooldown file (failure should not write cooldown)
+        assert not watcher_state["last_run"].exists()
+
+    # -- mode switch mid-loop --
+
+    def test_mode_switch_takes_effect_next_cycle(self, watcher_state):
+        """Mode is re-read every poll cycle; switching from standalone → notify mid-loop."""
+        write_signal(watcher_state["signal_file"])
+        call_count = 0
+
+        def mode_switching_sleep(_):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                # After first poll (standalone), switch to notify
+                watcher_state["mode_file"].write_text("notify\n")
+            elif call_count >= 3:
+                raise KeyboardInterrupt
+
+        with patch.object(watcher, 'POLL_SECONDS', 0), \
+             patch.object(watcher, 'COOLDOWN_SECONDS', 0), \
+             patch.object(watcher, 'show_notification', return_value="refresh") as mock_notify, \
+             patch.object(watcher, 'run_aws_sso_login', return_value=0), \
+             patch('time.sleep', side_effect=mode_switching_sleep):
+            # Start in standalone
+            watcher_state["mode_file"].write_text("standalone\n")
+            watcher.main()
+
+        # Should have eventually processed the signal after mode switch
+        mock_notify.assert_called_once()
+        assert not watcher_state["signal_file"].exists()
+
+    # -- lock released after all outcomes --
+
+    def test_lock_released_after_auto_success(self, watcher_state):
+        """Lock must be released after auto mode success."""
+        write_signal(watcher_state["signal_file"])
+        with patch.object(watcher, 'read_mode', return_value='auto'), \
+             patch.object(watcher, 'POLL_SECONDS', 0), \
+             patch.object(watcher, 'COOLDOWN_SECONDS', 0), \
+             patch.object(watcher, 'run_aws_sso_login', return_value=0), \
+             patch('time.sleep', side_effect=_stop_after(2)):
+            watcher.main()
+        assert not watcher_state["lock_dir"].exists()
+
+    def test_lock_released_after_auto_failure(self, watcher_state):
+        """Lock must be released after auto mode failure."""
+        write_signal(watcher_state["signal_file"])
+        with patch.object(watcher, 'read_mode', return_value='auto'), \
+             patch.object(watcher, 'POLL_SECONDS', 0), \
+             patch.object(watcher, 'COOLDOWN_SECONDS', 0), \
+             patch.object(watcher, 'run_aws_sso_login', return_value=1), \
+             patch('time.sleep', side_effect=_stop_after(2)):
+            watcher.main()
+        assert not watcher_state["lock_dir"].exists()
+
+    def test_lock_released_after_snooze(self, watcher_state):
+        """Lock must be released after snooze."""
+        write_signal(watcher_state["signal_file"])
+        with patch.object(watcher, 'read_mode', return_value='notify'), \
+             patch.object(watcher, 'POLL_SECONDS', 0), \
+             patch.object(watcher, 'COOLDOWN_SECONDS', 0), \
+             patch.object(watcher, 'show_notification', return_value="snooze:900"), \
+             patch('time.sleep', side_effect=_stop_after(1)):
+            watcher.main()
+        assert not watcher_state["lock_dir"].exists()

@@ -104,6 +104,14 @@ Environment variables in `.env` (copy from `.env.example`):
 - **Installation**: `mise run sso-install`
 
 
+## State Machines
+
+See [docs/state-machine.md](docs/state-machine.md) for formal state diagrams (Mermaid) covering:
+- Watcher mode transitions (notify/auto/standalone)
+- Signal lifecycle (created → snoozed → handled → cleared)
+- Cooldown vs snooze mechanics
+- Machine-readable transition table
+
 ## Data Flow
 
 ### Automated Flow (with SSO Watcher)

@@ -19,12 +19,12 @@ tests/
 │   └── sample_aws_config.ini
 └── unit/
     ├── test_s3proxy.py      # S3 proxy tests (19 tests)
-    └── test_watcher.py      # SSO watcher tests (58 tests)
+    └── test_watcher.py      # SSO watcher tests (69 tests)
 ```
 
 ## Test Coverage
 
-**77 passing tests** (19 s3proxy + 58 watcher)
+**88 passing tests** (19 s3proxy + 69 watcher)
 
 ### S3 Proxy Tests (`tests/unit/test_s3proxy.py`)
 
@@ -82,6 +82,14 @@ tests/
 - Read mode from file (notify/standalone), fallback to env, default
 - Ignore invalid file/env, write mode, write invalid mode
 - Standalone mode skips signal, standalone handle_login returns dismiss
+
+**State Machine Transitions — `TestStateMachineTransitions`** (11 tests):
+- Lock held skips login (main loop integration)
+- Auto mode: success clears signal, failure writes 30s snooze
+- Cooldown file written on success, dismiss, suppress
+- Failure writes 30s snooze but NOT cooldown
+- Mode switch mid-loop takes effect next cycle
+- Lock released after auto success, auto failure, snooze
 
 ## Running Tests
 
