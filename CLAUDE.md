@@ -97,7 +97,7 @@ Environment variables in `.env` (copy from `.env.example`):
   - In `notify` mode (default): shows macOS dialog with 3 options:
     - **Refresh**: runs `aws sso login` (opens browser)
     - **Snooze**: pick 15m/30m/1h/4h, writes `nextAttemptAfter` to signal file
-    - **Don't Remind**: shows warning, clears signal (manual `mise run sso-test` needed later)
+    - **Don't Remind**: shows warning, clears signal (manual `mise run sso-login` needed later)
   - In `auto` mode: triggers `aws sso login` immediately (opens browser)
   - Clears signal on success
   - Atomic locking, cooldown protection (default 600s)

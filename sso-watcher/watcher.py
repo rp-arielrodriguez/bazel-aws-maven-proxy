@@ -163,7 +163,7 @@ else if btn is "Don't Remind" then
     display dialog ¬
         "Reminders will be disabled until a new signal is received." & return & return & ¬
         "To manually refresh credentials later, run:" & return & return & ¬
-        "    mise run sso-test" & return & ¬
+        "    mise run sso-login" & return & ¬
         "    aws sso login --profile {profile}" ¬
         with title "Disable SSO Reminders?" ¬
         with icon caution ¬

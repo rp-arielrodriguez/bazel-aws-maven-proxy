@@ -48,8 +48,8 @@ run = "bash scripts/sso-restart.sh"
 description = "Tail SSO watcher logs"
 run = "bash scripts/sso-logs.sh"
 
-[tasks.sso-test]
-description = "Test SSO watcher with a dummy signal file"
+[tasks.sso-login]
+description = "Trigger SSO login (creates signal to wake the watcher)"
 run = """
 # Load .env to get correct AWS_PROFILE
 if [ -f .env ]; then source .env; fi
@@ -57,24 +57,22 @@ SIGNAL_DIR="$HOME/.aws/sso-renewer"
 SIGNAL_FILE="$SIGNAL_DIR/login-required.json"
 AWS_PROFILE="${AWS_PROFILE:-default}"
 
-echo "Creating test signal file..."
+# Clear cooldown so dialog shows immediately
+rm -f "$SIGNAL_DIR/last-login-at.txt" 2>/dev/null || true
+
+echo "Creating signal file..."
 mkdir -p "$SIGNAL_DIR"
 
 cat > "$SIGNAL_FILE" << EOF
 {
   "profile": "$AWS_PROFILE",
-  "reason": "Test signal from mise task",
+  "reason": "Manual trigger via mise run sso-login",
   "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 }
 EOF
 
-echo "✓ Created signal: $SIGNAL_FILE"
-echo ""
-echo "The watcher should trigger aws sso login within 5 seconds."
-echo "Check logs with: mise run sso-logs"
-echo ""
-echo "To manually trigger login now (without waiting):"
-echo "  python3 sso-watcher/watcher.py  # Run once in foreground"
+echo "✓ Signal created, watcher will show login dialog within 5 seconds."
+echo "  Check logs: mise run sso-logs"
 """
 
 [tasks.sso-clean]

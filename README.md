@@ -260,21 +260,26 @@ docker compose up -d    # Docker
 ### SSO Watcher (macOS)
 
 ```bash
-# Install watcher
-mise run sso-install
-
-# Check status
-mise run sso-status
-
-# View logs
-mise run sso-logs
-
-# Restart watcher
-mise run sso-restart
-
-# Uninstall
-mise run sso-uninstall
+mise run sso-install     # Install watcher
+mise run sso-login       # Trigger login dialog manually
+mise run sso-status      # Check status
+mise run sso-logs        # View logs
+mise run sso-restart     # Restart watcher
+mise run sso-clean       # Clear state/signals
+mise run sso-uninstall   # Uninstall
 ```
+
+### Dialog Actions Quick Reference
+
+| Action | Signal | Next dialog |
+|--------|--------|-------------|
+| **Refresh** → success | cleared | on next credential expiry |
+| **Refresh** → timeout/fail | kept | ~30s (auto-retry) |
+| **Snooze** | kept | user-chosen (15m/30m/1h/4h) |
+| **Dismiss** / ignore (120s timeout) | kept | ~10 min (cooldown) |
+| **Don't Remind** | cleared | only on new expiry signal |
+
+To force login anytime: `mise run sso-login`
 
 
 ## Troubleshooting

@@ -50,8 +50,8 @@ mise run sso-logs
 ### Test it
 
 ```bash
-# Create a fake signal
-mise run sso-test
+# Trigger login dialog
+mise run sso-login
 
 # Watcher will show a dialog within 5 seconds (notify mode)
 # Or open browser immediately (auto mode)

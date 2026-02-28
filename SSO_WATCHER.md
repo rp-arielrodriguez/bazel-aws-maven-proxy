@@ -41,12 +41,25 @@ Host daemon (launchd user agent) that:
 - In `notify` mode (default): shows macOS dialog with Refresh/Snooze/Don't Remind
   - **Refresh**: opens browser for SSO login
   - **Snooze**: pick 15m/30m/1h/4h, writes `nextAttemptAfter` to signal
-  - **Don't Remind**: clears signal after warning (manual `mise run sso-test` needed later)
+  - **Don't Remind**: clears signal after warning (manual `mise run sso-login` needed later)
 - In `auto` mode: runs login immediately (opens browser)
 - Uses atomic directory locking (`mkdir`)
 - Cooldown (default 600s) prevents popup spam
 - Runs `aws sso login --profile <profile>`
 - Clears signal on success, keeps on failure for retry
+- Login timeout: 120s (prevents hanging if browser tab closed)
+
+#### Dialog Actions Quick Reference
+
+| Action | Signal | Next dialog |
+|--------|--------|-------------|
+| **Refresh** → success | cleared | on next credential expiry |
+| **Refresh** → timeout/fail | kept | ~30s (auto-retry) |
+| **Snooze** | kept | user-chosen (15m/30m/1h/4h) |
+| **Dismiss** / ignore (120s timeout) | kept | ~10 min (cooldown) |
+| **Don't Remind** | cleared | only on new expiry signal |
+
+To force login anytime: `mise run sso-login`
 
 ### `launchd/com.bazel.sso-watcher.plist`
 
