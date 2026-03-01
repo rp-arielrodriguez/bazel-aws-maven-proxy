@@ -167,6 +167,8 @@ mise run sso-clean            # Clear state/signals
 
 All modes except `standalone` attempt silent token refresh first using the cached refresh token. Only when that fails do they fall back to their mode-specific behavior.
 
+**Proactive refresh:** The watcher also checks token expiry every 60s (independently of the monitor signal). When the token is within 30 minutes of expiry, it silently refreshes — keeping credentials alive without any user interaction, even across sleep/wake cycles.
+
 Switch at runtime: `mise run sso-mode:notify|auto|silent|standalone` — takes effect within seconds.
 
 ### Dialog Actions Quick Reference
@@ -195,6 +197,7 @@ Environment variables in `.env`:
 | `SSO_COOLDOWN_SECONDS` | Watcher cooldown between logins | `600` |
 | `SSO_POLL_SECONDS` | Watcher signal poll interval | `5` |
 | `SSO_LOGIN_MODE` | `notify`, `auto`, `silent`, or `standalone` | `notify` |
+| `SSO_PROACTIVE_REFRESH_MINUTES` | Refresh token N min before expiry (0=disable) | `30` |
 | `CONTAINER_ENGINE` | `podman` or `docker` | auto-detect |
 
 ## Troubleshooting
@@ -234,13 +237,13 @@ aws s3 ls s3://your-bucket/ --profile bazel-cache
 |----------|-------------|
 | [docs/sso-watcher.md](docs/sso-watcher.md) | SSO watcher architecture and internals |
 | [docs/state-machine.md](docs/state-machine.md) | State diagrams (Mermaid) for modes, signals, cooldown |
-| [docs/testing.md](docs/testing.md) | Test structure and coverage (131 tests) |
+| [docs/testing.md](docs/testing.md) | Test structure and coverage (144 tests) |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute |
 
 ## Testing
 
 ```bash
-pytest              # Run all 131 tests
+pytest              # Run all 144 tests
 ./run_tests.sh      # Helper script
 ```
 

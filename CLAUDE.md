@@ -61,6 +61,7 @@ Environment variables in `.env` (copy from `.env.example`):
 - `SSO_COOLDOWN_SECONDS`: Watcher cooldown (default: 600)
 - `SSO_POLL_SECONDS`: Watcher poll interval (default: 5)
 - `SSO_LOGIN_MODE`: Login behavior - `notify` (default, dialog), `auto` (browser immediately), `silent` (token refresh only, no browser), `standalone` (manual only). Toggleable at runtime via `mise run sso-mode:*`
+- `SSO_PROACTIVE_REFRESH_MINUTES`: Refresh token N min before expiry, 0 to disable (default: 30)
 - `CONTAINER_ENGINE`: `podman` or `docker` (auto-detect if unset, prefers podman)
 
 ## Architecture

@@ -129,12 +129,25 @@ All settings via `.env`:
 | `SSO_LOGIN_MODE` | `notify`, `auto`, `silent`, or `standalone` | `notify` |
 | `SSO_COOLDOWN_SECONDS` | Cooldown between logins (seconds) | `600` |
 | `SSO_POLL_SECONDS` | Signal poll interval (seconds) | `5` |
+| `SSO_PROACTIVE_REFRESH_MINUTES` | Refresh token N min before expiry (0=disable) | `30` |
 
 After changing `.env`, run `mise run sso-install` to apply.
 
 Runtime mode toggle: `mise run sso-mode:notify|auto|silent|standalone` — takes effect within seconds, no restart needed.
 
 ## Implementation Details
+
+### Proactive Token Refresh
+
+Independently of the signal file, the watcher checks token expiry every 60s. When the access token is within `SSO_PROACTIVE_REFRESH_MINUTES` (default 30) of expiry, it attempts silent refresh proactively — before the monitor even detects expiry.
+
+This is critical because:
+- Access tokens and refresh tokens often have similar lifetimes (e.g. both 1 hour)
+- By the time the monitor signals "expired", the refresh token may be dead too
+- Proactive refresh keeps both tokens alive throughout the day
+- After sleep/wake, the first poll checks expiry and refreshes if needed
+
+Set `SSO_PROACTIVE_REFRESH_MINUTES=0` to disable.
 
 ### Silent Token Refresh
 

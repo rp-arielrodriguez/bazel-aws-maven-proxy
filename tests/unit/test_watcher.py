@@ -1189,3 +1189,182 @@ class TestSilentModeMainLoop:
              patch('time.sleep', side_effect=_stop_after(2)):
             watcher.main()
         assert not watcher_state["lock_dir"].exists()
+
+
+# ---------------------------------------------------------------------------
+# check_token_near_expiry
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestCheckTokenNearExpiry:
+
+    def _make_cache(self, tmp_path, expires_at):
+        config_file = tmp_path / "config"
+        config_file.write_text(
+            "[profile test]\n"
+            "sso_session = s\n\n"
+            "[sso-session s]\n"
+            "sso_start_url = https://test.awsapps.com/start\n"
+            "sso_region = us-east-1\n"
+        )
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+        (cache_dir / "tok.json").write_text(json.dumps({
+            "startUrl": "https://test.awsapps.com/start",
+            "accessToken": "tok",
+            "refreshToken": "ref",
+            "clientId": "cid",
+            "clientSecret": "cs",
+            "expiresAt": expires_at,
+        }))
+        return config_file, cache_dir
+
+    def test_token_near_expiry(self, tmp_path):
+        """Token expiring in 10min with 30min threshold → True."""
+        from datetime import datetime, timezone, timedelta
+        expires = (datetime.now(timezone.utc) + timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        config_file, cache_dir = self._make_cache(tmp_path, expires)
+        with patch.object(watcher, 'AWS_CONFIG_FILE', config_file), \
+             patch.object(watcher, 'SSO_CACHE_DIR', cache_dir):
+            assert watcher.check_token_near_expiry("test", 30) is True
+
+    def test_token_not_near_expiry(self, tmp_path):
+        """Token expiring in 4h with 30min threshold → False."""
+        from datetime import datetime, timezone, timedelta
+        expires = (datetime.now(timezone.utc) + timedelta(hours=4)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        config_file, cache_dir = self._make_cache(tmp_path, expires)
+        with patch.object(watcher, 'AWS_CONFIG_FILE', config_file), \
+             patch.object(watcher, 'SSO_CACHE_DIR', cache_dir):
+            assert watcher.check_token_near_expiry("test", 30) is False
+
+    def test_token_already_expired(self, tmp_path):
+        """Token already expired → True."""
+        from datetime import datetime, timezone, timedelta
+        expires = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        config_file, cache_dir = self._make_cache(tmp_path, expires)
+        with patch.object(watcher, 'AWS_CONFIG_FILE', config_file), \
+             patch.object(watcher, 'SSO_CACHE_DIR', cache_dir):
+            assert watcher.check_token_near_expiry("test", 30) is True
+
+    def test_no_config(self, tmp_path):
+        config_file = tmp_path / "config"
+        config_file.write_text("[default]\n")
+        with patch.object(watcher, 'AWS_CONFIG_FILE', config_file):
+            assert watcher.check_token_near_expiry("noexist", 30) is False
+
+    def test_no_cache_file(self, tmp_path):
+        config_file = tmp_path / "config"
+        config_file.write_text(
+            "[profile p]\nsso_session = s\n\n"
+            "[sso-session s]\nsso_start_url = https://x.com\nsso_region = us-east-1\n"
+        )
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+        with patch.object(watcher, 'AWS_CONFIG_FILE', config_file), \
+             patch.object(watcher, 'SSO_CACHE_DIR', cache_dir):
+            assert watcher.check_token_near_expiry("p", 30) is False
+
+    def test_no_expires_at_field(self, tmp_path):
+        config_file = tmp_path / "config"
+        config_file.write_text(
+            "[profile p]\nsso_session = s\n\n"
+            "[sso-session s]\nsso_start_url = https://x.com\nsso_region = us-east-1\n"
+        )
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+        (cache_dir / "tok.json").write_text(json.dumps({
+            "startUrl": "https://x.com",
+            "accessToken": "tok",
+            "refreshToken": "ref",
+            "clientId": "cid",
+            "clientSecret": "cs",
+            # no expiresAt
+        }))
+        with patch.object(watcher, 'AWS_CONFIG_FILE', config_file), \
+             patch.object(watcher, 'SSO_CACHE_DIR', cache_dir):
+            assert watcher.check_token_near_expiry("p", 30) is False
+
+    def test_uses_default_threshold(self, tmp_path):
+        """Uses PROACTIVE_REFRESH_MINUTES when threshold_minutes is None."""
+        from datetime import datetime, timezone, timedelta
+        expires = (datetime.now(timezone.utc) + timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        config_file, cache_dir = self._make_cache(tmp_path, expires)
+        with patch.object(watcher, 'AWS_CONFIG_FILE', config_file), \
+             patch.object(watcher, 'SSO_CACHE_DIR', cache_dir), \
+             patch.object(watcher, 'PROACTIVE_REFRESH_MINUTES', 30):
+            assert watcher.check_token_near_expiry("test") is True
+
+
+# ---------------------------------------------------------------------------
+# Proactive refresh in main loop
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestProactiveRefreshMainLoop:
+
+    def test_proactive_refresh_when_near_expiry(self, watcher_state):
+        """No signal, token near expiry → proactive silent refresh fires."""
+        with patch.object(watcher, 'read_mode', return_value='notify'), \
+             patch.object(watcher, 'POLL_SECONDS', 0), \
+             patch.object(watcher, 'PROACTIVE_REFRESH_MINUTES', 30), \
+             patch.object(watcher, 'check_token_near_expiry', return_value=True) as mock_check, \
+             patch.object(watcher, 'try_silent_refresh', return_value=True) as mock_refresh, \
+             patch('time.sleep', side_effect=_stop_after(2)):
+            watcher.main()
+        mock_check.assert_called()
+        mock_refresh.assert_called_once_with(watcher.PROFILE)
+
+    def test_proactive_no_refresh_when_token_healthy(self, watcher_state):
+        """No signal, token healthy → no refresh attempt."""
+        with patch.object(watcher, 'read_mode', return_value='notify'), \
+             patch.object(watcher, 'POLL_SECONDS', 0), \
+             patch.object(watcher, 'PROACTIVE_REFRESH_MINUTES', 30), \
+             patch.object(watcher, 'check_token_near_expiry', return_value=False), \
+             patch.object(watcher, 'try_silent_refresh') as mock_refresh, \
+             patch('time.sleep', side_effect=_stop_after(2)):
+            watcher.main()
+        mock_refresh.assert_not_called()
+
+    def test_proactive_skipped_when_signal_exists(self, watcher_state):
+        """Signal file present → proactive check skipped (signal path handles it)."""
+        write_signal(watcher_state["signal_file"])
+        with patch.object(watcher, 'read_mode', return_value='notify'), \
+             patch.object(watcher, 'POLL_SECONDS', 0), \
+             patch.object(watcher, 'COOLDOWN_SECONDS', 0), \
+             patch.object(watcher, 'PROACTIVE_REFRESH_MINUTES', 30), \
+             patch.object(watcher, 'check_token_near_expiry') as mock_check, \
+             patch.object(watcher, 'show_notification', return_value="dismiss"), \
+             patch('time.sleep', side_effect=_stop_after(1)):
+            watcher.main()
+        mock_check.assert_not_called()
+
+    def test_proactive_skipped_in_standalone(self, watcher_state):
+        """Standalone mode → no proactive check."""
+        with patch.object(watcher, 'read_mode', return_value='standalone'), \
+             patch.object(watcher, 'POLL_SECONDS', 0), \
+             patch.object(watcher, 'PROACTIVE_REFRESH_MINUTES', 30), \
+             patch.object(watcher, 'check_token_near_expiry') as mock_check, \
+             patch('time.sleep', side_effect=_stop_after(2)):
+            watcher.main()
+        mock_check.assert_not_called()
+
+    def test_proactive_disabled_when_zero(self, watcher_state):
+        """PROACTIVE_REFRESH_MINUTES=0 disables proactive refresh."""
+        with patch.object(watcher, 'read_mode', return_value='notify'), \
+             patch.object(watcher, 'POLL_SECONDS', 0), \
+             patch.object(watcher, 'PROACTIVE_REFRESH_MINUTES', 0), \
+             patch.object(watcher, 'check_token_near_expiry') as mock_check, \
+             patch('time.sleep', side_effect=_stop_after(2)):
+            watcher.main()
+        mock_check.assert_not_called()
+
+    def test_proactive_refresh_failure_does_not_crash(self, watcher_state):
+        """Proactive silent refresh fails → logs, continues loop."""
+        with patch.object(watcher, 'read_mode', return_value='notify'), \
+             patch.object(watcher, 'POLL_SECONDS', 0), \
+             patch.object(watcher, 'PROACTIVE_REFRESH_MINUTES', 30), \
+             patch.object(watcher, 'check_token_near_expiry', return_value=True), \
+             patch.object(watcher, 'try_silent_refresh', return_value=False), \
+             patch('time.sleep', side_effect=_stop_after(2)):
+            # Should not raise
+            watcher.main()

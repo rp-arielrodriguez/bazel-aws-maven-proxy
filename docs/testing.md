@@ -19,12 +19,12 @@ tests/
 │   └── sample_aws_config.ini
 └── unit/
     ├── test_s3proxy.py      # S3 proxy tests (19 tests)
-    └── test_watcher.py      # SSO watcher tests (112 tests)
+    └── test_watcher.py      # SSO watcher tests (125 tests)
 ```
 
 ## Test Coverage
 
-**131 passing tests** (19 s3proxy + 112 watcher)
+**144 passing tests** (19 s3proxy + 125 watcher)
 
 ### S3 Proxy Tests (`tests/unit/test_s3proxy.py`)
 
@@ -117,6 +117,14 @@ tests/
 
 **Silent Mode Main Loop — `TestSilentModeMainLoop`** (3 tests):
 - Success clears signal, failure writes 30s snooze, lock released
+
+**Token Expiry Check — `TestCheckTokenNearExpiry`** (7 tests):
+- Near expiry, not near, already expired, no config, no cache
+- No expiresAt field, uses default threshold
+
+**Proactive Refresh Main Loop — `TestProactiveRefreshMainLoop`** (6 tests):
+- Fires when near expiry, skips when healthy, skips with signal present
+- Skips in standalone, disabled when zero, failure doesn't crash
 
 ## Running Tests
 

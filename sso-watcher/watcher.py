@@ -13,6 +13,11 @@ refresh token is still valid, credentials are renewed without browser
 interaction. Only when silent refresh fails does it fall back to the
 mode-specific behavior (dialog, browser, or nothing).
 
+Proactive refresh: independently of the signal file, the watcher checks
+token expiry every 60s. If the token expires within PROACTIVE_REFRESH_MINUTES
+(default 30), it attempts silent refresh before the monitor even detects
+expiry. This keeps tokens alive across sleep/wake cycles.
+
 Modes:
 - notify (default): try silent refresh, then dialog with Refresh/Snooze/Don't Remind
 - auto: try silent refresh, then open browser immediately
@@ -50,6 +55,7 @@ LAST_RUN_FILE = STATE_DIR / "last-login-at.txt"
 MODE_FILE = STATE_DIR / "mode"
 COOLDOWN_SECONDS = int(os.environ.get("SSO_COOLDOWN_SECONDS", "600"))  # 10 min
 POLL_SECONDS = int(os.environ.get("SSO_POLL_SECONDS", "5"))
+PROACTIVE_REFRESH_MINUTES = int(os.environ.get("SSO_PROACTIVE_REFRESH_MINUTES", "30"))
 
 # Login mode: state file > env var > default
 _ENV_MODE = os.environ.get("SSO_LOGIN_MODE", "notify")
@@ -192,6 +198,41 @@ def _find_sso_cache_file(start_url: str) -> dict | None:
         except Exception:
             continue
     return None
+
+
+def check_token_near_expiry(profile: str, threshold_minutes: int | None = None) -> bool:
+    """
+    Check if the SSO access token is near expiry.
+
+    Reads the cache file for the profile's sso-session and checks expiresAt.
+
+    Args:
+        profile: AWS profile name
+        threshold_minutes: minutes before expiry to trigger (default: PROACTIVE_REFRESH_MINUTES)
+
+    Returns:
+        True if token expires within threshold (or is already expired), False if
+        token is healthy or no cache file found.
+    """
+    threshold = threshold_minutes if threshold_minutes is not None else PROACTIVE_REFRESH_MINUTES
+    session = _get_sso_session_config(profile)
+    if not session.get("start_url"):
+        return False
+
+    cache = _find_sso_cache_file(session["start_url"])
+    if not cache:
+        return False
+
+    expires_at = cache.get("expiresAt", "")
+    if not expires_at:
+        return False
+
+    try:
+        exp_dt = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+        remaining = exp_dt - datetime.now(timezone.utc)
+        return remaining < timedelta(minutes=threshold)
+    except Exception:
+        return False
 
 
 def try_silent_refresh(profile: str) -> bool:
@@ -700,6 +741,12 @@ def main() -> int:
 
     print(f"[sso-watcher] watching {SIGNAL_FILE} (profile={PROFILE})", flush=True)
     print(f"[sso-watcher] mode={read_mode()}, cooldown={COOLDOWN_SECONDS}s, poll={POLL_SECONDS}s", flush=True)
+    if PROACTIVE_REFRESH_MINUTES > 0:
+        print(f"[sso-watcher] proactive refresh: {PROACTIVE_REFRESH_MINUTES}min before expiry", flush=True)
+
+    last_proactive_check: float = 0
+    # Check token expiry every 60s (not every poll cycle)
+    proactive_check_interval = 60
 
     while True:
         try:
@@ -709,6 +756,18 @@ def main() -> int:
             if current_mode == "standalone":
                 time.sleep(POLL_SECONDS)
                 continue
+
+            # Proactive refresh: check token expiry independently of signal
+            if (PROACTIVE_REFRESH_MINUTES > 0
+                    and not SIGNAL_FILE.exists()
+                    and time.time() - last_proactive_check >= proactive_check_interval):
+                last_proactive_check = time.time()
+                if check_token_near_expiry(PROFILE, PROACTIVE_REFRESH_MINUTES):
+                    print(f"[sso-watcher] proactive: token near expiry, attempting silent refresh", flush=True)
+                    if try_silent_refresh(PROFILE):
+                        print("[sso-watcher] proactive: token refreshed successfully", flush=True)
+                    else:
+                        print("[sso-watcher] proactive: silent refresh failed, waiting for signal", flush=True)
 
             if should_trigger_login():
                 if not try_acquire_lock():

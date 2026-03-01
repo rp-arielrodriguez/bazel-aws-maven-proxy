@@ -95,6 +95,20 @@ stateDiagram-v2
     idle --> idle : polls every 5s, ignores signals
 ```
 
+## Proactive Refresh (independent of signal)
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> checking : every 60s
+    checking --> healthy : token valid, >30min left
+    checking --> refreshing : token near expiry, <30min left
+    refreshing --> healthy : silent refresh success
+    refreshing --> waiting : silent refresh failed
+    healthy --> checking : 60s
+    waiting --> checking : monitor will signal if expired
+```
+
 ## Signal Lifecycle
 
 The signal file (`~/.aws/sso-renewer/login-required.json`) drives the watcher.
