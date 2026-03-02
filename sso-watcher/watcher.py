@@ -99,9 +99,15 @@ def write_last_run(ts: float) -> None:
     LAST_RUN_FILE.write_text(f"{ts}\n")
 
 
+LOCK_STALE_SECONDS = 300  # 5 min — lock older than this is stale
+
+
 def try_acquire_lock() -> bool:
     """
     Try to acquire lock using atomic directory creation.
+
+    If the lock directory exists but is older than LOCK_STALE_SECONDS,
+    it's considered stale (from a crashed/killed process) and removed.
 
     Returns:
         True if lock acquired, False if already held
@@ -110,6 +116,16 @@ def try_acquire_lock() -> bool:
         LOCK_DIR.mkdir(parents=True, exist_ok=False)
         return True
     except FileExistsError:
+        # Check for stale lock
+        try:
+            age = time.time() - LOCK_DIR.stat().st_mtime
+            if age > LOCK_STALE_SECONDS:
+                print(f"[sso-watcher] removing stale lock (age={int(age)}s)", flush=True)
+                LOCK_DIR.rmdir()
+                LOCK_DIR.mkdir(parents=True, exist_ok=False)
+                return True
+        except Exception:
+            pass
         return False
 
 
@@ -603,8 +619,7 @@ def run_aws_sso_login(profile: str | None = None) -> int:
     Run aws sso login with a timeout, reusing browser tabs when possible.
 
     Uses BROWSER env var to intercept the URL that AWS CLI would open,
-    then opens it via AppleScript for tab reuse. The CLI continues
-    polling for completion.
+    then opens it via AppleScript for tab reuse.
 
     Args:
         profile: AWS profile to use (defaults to PROFILE env var)
@@ -622,8 +637,8 @@ def run_aws_sso_login(profile: str | None = None) -> int:
         STATE_DIR.mkdir(parents=True, exist_ok=True)
         browser_script.write_text(
             '#!/bin/bash\n'
-            # Use osascript inline for tab reuse; fall back to open
             'URL="$1"\n'
+            # Use osascript inline for tab reuse; fall back to open
             'osascript -e "\n'
             'tell application \\"System Events\\"\n'
             '  if exists process \\"Google Chrome\\" then\n'
@@ -737,7 +752,7 @@ def handle_login(profile: str) -> str:
         print(f"[sso-watcher] dialog result: {action}", flush=True)
 
         if action == "refresh":
-            _show_toast("Complete authentication in browser", f"AWS SSO — {profile}")
+            pass  # progress dialog shown by run_aws_sso_login
         elif action.startswith("snooze:"):
             return action
         elif action == "suppress":
@@ -747,7 +762,7 @@ def handle_login(profile: str) -> str:
             return "dismiss"
 
     elif mode == "auto":
-        _show_toast("Credentials expired — complete authentication in browser", f"AWS SSO — {profile}")
+        pass  # progress dialog shown by run_aws_sso_login
 
     rc = run_aws_sso_login(profile)
     return "success" if rc == 0 else "failed"
