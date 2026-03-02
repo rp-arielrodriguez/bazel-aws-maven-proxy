@@ -17,6 +17,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../sso-watcher'))
 import watcher
 
 
+@pytest.fixture(autouse=True)
+def _no_toast():
+    """Prevent osascript toast notifications from spawning during tests."""
+    with patch.object(watcher, '_show_toast'):
+        yield
+
+
 @pytest.fixture
 def watcher_state(tmp_path):
     """Set up isolated watcher state directory."""

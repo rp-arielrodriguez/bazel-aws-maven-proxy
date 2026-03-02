@@ -582,6 +582,19 @@ def show_notification(profile: str) -> str:
     return "dismiss"
 
 
+def _show_toast(message: str, title: str = "AWS SSO") -> None:
+    """Show a non-blocking macOS notification banner."""
+    try:
+        subprocess.Popen(
+            ["osascript", "-e",
+             f'display notification "{message}" with title "{title}"'],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        pass
+
+
 SSO_LOGIN_TIMEOUT = int(os.environ.get("SSO_LOGIN_TIMEOUT", "120"))  # seconds
 
 
@@ -724,7 +737,7 @@ def handle_login(profile: str) -> str:
         print(f"[sso-watcher] dialog result: {action}", flush=True)
 
         if action == "refresh":
-            pass  # fall through to login
+            _show_toast("Complete authentication in browser", f"AWS SSO — {profile}")
         elif action.startswith("snooze:"):
             return action
         elif action == "suppress":
@@ -732,6 +745,9 @@ def handle_login(profile: str) -> str:
         else:
             print("[sso-watcher] login skipped by user", flush=True)
             return "dismiss"
+
+    elif mode == "auto":
+        _show_toast("Credentials expired — complete authentication in browser", f"AWS SSO — {profile}")
 
     rc = run_aws_sso_login(profile)
     return "success" if rc == 0 else "failed"
