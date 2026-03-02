@@ -611,6 +611,28 @@ def _show_toast(message: str, title: str = "AWS SSO") -> None:
         pass
 
 
+def _show_progress_dialog(profile: str) -> None:
+    """Show a non-blocking progress dialog while AWS CLI connects.
+
+    Auto-dismisses after 10s. Fire-and-forget — no cleanup needed.
+    """
+    try:
+        subprocess.Popen(
+            ["osascript", "-e",
+             'tell application "System Events" to set frontmost of process "osascript" to true\n'
+             'tell me to activate\n'
+             f'display dialog "Connecting to AWS SSO ({profile})…" & return & return & '
+             '"Complete authentication in browser." '
+             'with title "AWS SSO" '
+             'buttons {{"OK"}} default button "OK" '
+             'giving up after 10'],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        pass
+
+
 SSO_LOGIN_TIMEOUT = int(os.environ.get("SSO_LOGIN_TIMEOUT", "120"))  # seconds
 
 
@@ -630,6 +652,8 @@ def run_aws_sso_login(profile: str | None = None) -> int:
     profile = profile or PROFILE
     cmd = ["aws", "sso", "login", "--profile", profile]
     print(f"[sso-watcher] running: {' '.join(cmd)} (timeout={SSO_LOGIN_TIMEOUT}s)", flush=True)
+
+    _show_progress_dialog(profile)
 
     # Create a temp script that opens URLs with tab reuse
     browser_script = STATE_DIR / "open-sso-url.sh"
