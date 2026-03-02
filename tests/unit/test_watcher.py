@@ -18,10 +18,9 @@ import watcher
 
 
 @pytest.fixture(autouse=True)
-def _no_dialogs():
-    """Prevent osascript dialogs/notifications from spawning during tests."""
-    with patch.object(watcher, '_show_toast'), \
-         patch.object(watcher, '_show_progress_dialog'):
+def _no_toast():
+    """Prevent osascript toast notifications from spawning during tests."""
+    with patch.object(watcher, '_show_toast'):
         yield
 
 
