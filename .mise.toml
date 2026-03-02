@@ -8,6 +8,11 @@ python = "3.11"
 # AWS CLI >= 2.9 required (refresh_token grant). Install via: brew install awscli
 # Not managed by mise — no native ARM macOS build available via aqua/asdf backends
 
+[tasks.setup]
+description = "Interactive first-time setup (prereqs, .env, install, start)"
+raw = true
+run = "bash scripts/setup.sh"
+
 [tasks.start]
 description = "Start complete system (containers + SSO watcher)"
 depends = ["containers:up", "sso-install"]

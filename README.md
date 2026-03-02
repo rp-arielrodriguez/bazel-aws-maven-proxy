@@ -48,77 +48,53 @@ See [docs/sso-watcher.md](docs/sso-watcher.md) for details.
 
 > **Note:** Python 3.11 is managed by mise and installed automatically on `mise install`.
 
-### 1. Configure AWS CLI with SSO
+### 1. Run setup
 
+```bash
+mise run setup
+```
+
+This interactive wizard will:
+- Verify prerequisites (aws, podman/docker, swiftc)
+- Prompt for AWS profile, region, S3 bucket, and create `.env`
+- Run `aws configure sso` if your profile isn't configured yet
+- Install Python via mise
+- Build the login webview and install the SSO watcher (launchd)
+- Optionally start containers
+
+<details>
+<summary>Manual setup (alternative)</summary>
+
+**Configure AWS SSO:**
 ```bash
 aws configure sso
 # SSO session name (Recommended): my-sso
 # SSO start URL: https://mycompany.awsapps.com/start
 # SSO region: us-west-2
 # SSO registration scopes [sso:account:access]:    ← press Enter (critical for token refresh)
-# <browser opens for authentication>
 # Select account → select role
-# CLI default client Region: us-west-2
-# CLI default output format: json
 # CLI profile name: bazel-cache
 ```
 
-This creates both the `[sso-session]` and `[profile]` sections in `~/.aws/config`. Verify:
-
-```bash
-aws sts get-caller-identity --profile bazel-cache
-```
-
-**Important:** The `sso_registration_scopes = sso:account:access` scope is required for silent token refresh. Without it, the watcher cannot renew tokens automatically and you'll need to re-authenticate in the browser every time tokens expire.
-
-<details>
-<summary>Manual configuration (alternative)</summary>
-
-Add to `~/.aws/config`:
-```ini
-[profile bazel-cache]
-sso_session = my-sso
-sso_account_id = 123456789012
-sso_role_name = DeveloperRole
-region = us-west-2
-
-[sso-session my-sso]
-sso_start_url = https://mycompany.awsapps.com/start
-sso_region = us-west-2
-sso_registration_scopes = sso:account:access
-```
-
-Then run initial login:
-```bash
-aws sso login --profile bazel-cache
-```
-</details>
+**Important:** The `sso_registration_scopes = sso:account:access` scope is required for silent token refresh.
 
 See [`examples/aws_config_example`](examples/aws_config_example) for a fully annotated config file.
 
-Do NOT use `~/.aws/credentials` — SSO tokens are managed by AWS CLI.
-
-### 2. Set up environment
-
+**Create .env:**
 ```bash
 cp .env.example .env
-# Edit .env:
-#   AWS_PROFILE=bazel-cache
-#   AWS_REGION=us-west-2
-#   S3_BUCKET_NAME=your-maven-bucket
+# Edit: AWS_PROFILE, AWS_REGION, S3_BUCKET_NAME
 ```
 
-### 3. Start services
-
+**Install and start:**
 ```bash
-# Everything (containers + SSO watcher)
-mise run start
-
-# Or containers only
-mise run containers:up
+mise install                # Python
+mise run sso-install        # Webview + launchd agent
+mise run start              # Containers
 ```
+</details>
 
-### 4. Configure Bazel
+### 2. Configure Bazel
 
 **.bazelrc**:
 ```
