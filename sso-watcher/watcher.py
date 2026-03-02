@@ -753,10 +753,34 @@ def handle_login(profile: str) -> str:
     return "success" if rc == 0 else "failed"
 
 
+MIN_AWS_CLI_VERSION = (2, 9)
+
+
+def _check_aws_cli() -> None:
+    """Verify aws CLI exists and is >= 2.9 (needed for refresh_token grant)."""
+    try:
+        proc = subprocess.run(
+            ["aws", "--version"], capture_output=True, text=True, timeout=10,
+        )
+        # Output: "aws-cli/2.33.2 Python/3.13.11 ..."
+        version_str = proc.stdout.strip().split()[0].split("/")[1]
+        parts = tuple(int(x) for x in version_str.split(".")[:2])
+        if parts < MIN_AWS_CLI_VERSION:
+            print(f"[sso-watcher] WARNING: aws-cli {version_str} < {'.'.join(map(str, MIN_AWS_CLI_VERSION))} "
+                  f"— silent refresh requires >= {'.'.join(map(str, MIN_AWS_CLI_VERSION))}", flush=True)
+        else:
+            print(f"[sso-watcher] aws-cli {version_str}", flush=True)
+    except FileNotFoundError:
+        print("[sso-watcher] WARNING: aws CLI not found — install with: brew install awscli", flush=True)
+    except Exception as e:
+        print(f"[sso-watcher] WARNING: could not check aws version: {e}", flush=True)
+
+
 def main() -> int:
     """Main watch loop."""
     STATE_DIR.mkdir(parents=True, exist_ok=True)
 
+    _check_aws_cli()
     print(f"[sso-watcher] watching {SIGNAL_FILE} (profile={PROFILE})", flush=True)
     print(f"[sso-watcher] mode={read_mode()}, cooldown={COOLDOWN_SECONDS}s, poll={POLL_SECONDS}s", flush=True)
     if PROACTIVE_REFRESH_MINUTES > 0:

@@ -122,21 +122,26 @@ output = json
 #
 # 1. You login once: aws sso login --profile bazel-cache
 #    - Opens browser, may require MFA
-#    - Creates access token (expires ~1 hour)
-#    - Creates refresh token (expires ~90 days)
+#    - Creates access token (typically 1 hour)
+#    - Creates refresh token (admin-controlled: 1h to 90 days)
 #
-# 2. sso-monitor checks credential validity
-#    - Checks every CHECK_INTERVAL seconds (default: 60)
+# 2. Proactive refresh (watcher)
+#    - Checks token expiry every 60s
+#    - Refreshes silently 30min before expiry (no browser)
+#    - Keeps tokens alive throughout the work day
 #
-# 3. When credentials expire:
-#    - sso-monitor writes signal to ~/.aws/sso-renewer/login-required.json
-#    - sso-watcher detects signal and prompts user (notify mode)
-#    - User completes SSO login in browser
+# 3. If proactive refresh fails (e.g. after overnight sleep):
+#    - sso-monitor detects expiry, writes signal
+#    - sso-watcher prompts user (notify mode) or opens browser (auto mode)
 #    - Both services detect new credentials automatically
 #
-# 4. Manual login only needed when refresh token expires
-#    - Approximately every 90 days (depends on SSO config)
-#    - sso-watcher will notify you when login is required
+# 4. Browser login needed when:
+#    - Both access + refresh tokens expired (e.g. overnight)
+#    - IdP enforces max session duration
+#    - Admin revokes the session
+#
+# Token lifetimes are admin-controlled (AWS IAM Identity Center settings).
+# Common configs: access=1h refresh=1h, access=8h refresh=90d.
 #
 # Without sso-session (old config):
 # - Must run 'aws sso login' multiple times per day

@@ -42,25 +42,37 @@ See [docs/sso-watcher.md](docs/sso-watcher.md) for details.
 ### Prerequisites
 
 - Podman (preferred) or Docker
-- AWS CLI v2
+- AWS CLI v2 >= 2.9 (`brew install awscli`)
 - Python 3.11+
 - mise (`brew install mise`)
 
 ### 1. Configure AWS CLI with SSO
 
 ```bash
-# Create SSO session
-aws configure sso-session
-# SSO session name: my-sso
+aws configure sso
+# SSO session name (Recommended): my-sso
 # SSO start URL: https://mycompany.awsapps.com/start
 # SSO region: us-west-2
-# SSO registration scopes: sso:account:access
-
-# Create profile
-aws configure sso --profile bazel-cache
+# SSO registration scopes [sso:account:access]:    ← press Enter (critical for token refresh)
+# <browser opens for authentication>
+# Select account → select role
+# CLI default client Region: us-west-2
+# CLI default output format: json
+# CLI profile name: bazel-cache
 ```
 
-Or manually add to `~/.aws/config`:
+This creates both the `[sso-session]` and `[profile]` sections in `~/.aws/config`. Verify:
+
+```bash
+aws sts get-caller-identity --profile bazel-cache
+```
+
+**Important:** The `sso_registration_scopes = sso:account:access` scope is required for silent token refresh. Without it, the watcher cannot renew tokens automatically and you'll need to re-authenticate in the browser every time tokens expire.
+
+<details>
+<summary>Manual configuration (alternative)</summary>
+
+Add to `~/.aws/config`:
 ```ini
 [profile bazel-cache]
 sso_session = my-sso
@@ -73,6 +85,14 @@ sso_start_url = https://mycompany.awsapps.com/start
 sso_region = us-west-2
 sso_registration_scopes = sso:account:access
 ```
+
+Then run initial login:
+```bash
+aws sso login --profile bazel-cache
+```
+</details>
+
+See [`examples/aws_config_example`](examples/aws_config_example) for a fully annotated config file.
 
 Do NOT use `~/.aws/credentials` — SSO tokens are managed by AWS CLI.
 

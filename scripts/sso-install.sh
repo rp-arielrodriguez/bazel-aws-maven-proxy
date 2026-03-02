@@ -16,6 +16,20 @@ SSO_COOLDOWN_SECONDS="${SSO_COOLDOWN_SECONDS:-600}"
 SSO_POLL_SECONDS="${SSO_POLL_SECONDS:-5}"
 SSO_LOGIN_MODE="${SSO_LOGIN_MODE:-notify}"
 
+# Check AWS CLI version (>= 2.9 required for silent refresh)
+if ! command -v aws &>/dev/null; then
+    echo "ERROR: aws CLI not found. Install with: brew install awscli"
+    exit 1
+fi
+AWS_VERSION=$(aws --version 2>&1 | awk '{print $1}' | cut -d/ -f2)
+AWS_MAJOR=$(echo "$AWS_VERSION" | cut -d. -f1)
+AWS_MINOR=$(echo "$AWS_VERSION" | cut -d. -f2)
+if [ "$AWS_MAJOR" -lt 2 ] || { [ "$AWS_MAJOR" -eq 2 ] && [ "$AWS_MINOR" -lt 9 ]; }; then
+    echo "ERROR: aws-cli $AWS_VERSION is too old. Need >= 2.9 for silent token refresh."
+    echo "Update with: brew upgrade awscli"
+    exit 1
+fi
+
 echo "Installing SSO watcher..."
 echo "  Repository: $REPO_PATH"
 echo "  Python: $PYTHON_PATH"
