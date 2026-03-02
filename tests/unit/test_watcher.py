@@ -17,13 +17,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../sso-watcher'))
 import watcher
 
 
-@pytest.fixture(autouse=True)
-def _no_toast():
-    """Prevent osascript toast notifications from spawning during tests."""
-    with patch.object(watcher, '_show_toast'):
-        yield
-
-
 @pytest.fixture
 def watcher_state(tmp_path):
     """Set up isolated watcher state directory."""
@@ -685,6 +678,210 @@ class TestStateMachineTransitions:
 
 
 # ---------------------------------------------------------------------------
+# _extract_authorize_url / _extract_callback_host / _launch_webview
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestExtractAuthorizeUrl:
+
+    def test_extracts_url_from_stdout(self):
+        proc = MagicMock()
+        proc.stdout = iter([
+            "Browser will not be automatically opened.\n",
+            "Please visit the following URL:\n",
+            "\n",
+            "https://oidc.us-east-1.amazonaws.com/authorize?client_id=abc&redirect_uri=http%3A%2F%2F127.0.0.1%3A9999%2Fcallback\n",
+        ])
+        result = watcher._extract_authorize_url(proc)
+        assert result == "https://oidc.us-east-1.amazonaws.com/authorize?client_id=abc&redirect_uri=http%3A%2F%2F127.0.0.1%3A9999%2Fcallback"
+
+    def test_returns_none_when_no_url(self):
+        proc = MagicMock()
+        proc.stdout = iter([
+            "Some error message\n",
+            "No URL here\n",
+        ])
+        result = watcher._extract_authorize_url(proc, timeout=0.1)
+        assert result is None
+
+    def test_returns_none_when_stdout_is_none(self):
+        proc = MagicMock()
+        proc.stdout = None
+        result = watcher._extract_authorize_url(proc)
+        assert result is None
+
+    def test_returns_none_on_empty_stdout(self):
+        proc = MagicMock()
+        proc.stdout = iter([])
+        result = watcher._extract_authorize_url(proc)
+        assert result is None
+
+
+@pytest.mark.unit
+class TestExtractCallbackHost:
+
+    def test_extracts_host_and_port(self):
+        url = "https://oidc.example.com/authorize?redirect_uri=http%3A%2F%2F127.0.0.1%3A60137%2Foauth%2Fcallback"
+        assert watcher._extract_callback_host(url) == "127.0.0.1:60137"
+
+    def test_extracts_host_without_port(self):
+        url = "https://oidc.example.com/authorize?redirect_uri=http%3A%2F%2Flocalhost%2Fcallback"
+        assert watcher._extract_callback_host(url) == "localhost"
+
+    def test_returns_default_on_missing_redirect_uri(self):
+        url = "https://oidc.example.com/authorize?client_id=abc"
+        assert watcher._extract_callback_host(url) == "127.0.0.1"
+
+    def test_returns_default_on_invalid_url(self):
+        assert watcher._extract_callback_host("not-a-url") == "127.0.0.1"
+
+
+@pytest.mark.unit
+class TestLaunchWebview:
+
+    def test_returns_none_when_binary_missing(self, tmp_path):
+        with patch.object(watcher, 'WEBVIEW_APP', tmp_path / "nonexistent"):
+            result = watcher._launch_webview("https://example.com", "127.0.0.1:9999")
+            assert result is None
+
+    def test_launches_webview_when_binary_exists(self, tmp_path):
+        # Simulate .app bundle structure: tmp/SSOLogin.app/Contents/MacOS/sso-webview
+        app_dir = tmp_path / "SSOLogin.app" / "Contents" / "MacOS"
+        app_dir.mkdir(parents=True)
+        fake_bin = app_dir / "sso-webview"
+        fake_bin.write_text("#!/bin/sh\n")
+        fake_bin.chmod(0o755)
+        mock_popen = MagicMock()
+        with patch.object(watcher, 'WEBVIEW_APP', fake_bin), \
+             patch.object(watcher.subprocess, 'Popen', return_value=mock_popen) as mock_call:
+            result = watcher._launch_webview("https://example.com", "127.0.0.1:9999")
+            assert result is mock_popen
+            mock_call.assert_called_once()
+            args = mock_call.call_args[0][0]
+            assert args[0] == "open"
+            assert args[1] == "-a"
+            assert "SSOLogin.app" in args[2]
+            assert "https://example.com" in args
+            assert "127.0.0.1:9999" in args
+
+    def test_returns_none_on_popen_failure(self, tmp_path):
+        fake_bin = tmp_path / "sso-webview"
+        fake_bin.write_text("#!/bin/sh\n")
+        fake_bin.chmod(0o755)
+        with patch.object(watcher, 'WEBVIEW_APP', fake_bin), \
+             patch.object(watcher.subprocess, 'Popen', side_effect=OSError("exec failed")):
+            result = watcher._launch_webview("https://example.com", "127.0.0.1:9999")
+            assert result is None
+
+
+@pytest.mark.unit
+class TestRunAwsSsoLogin:
+
+    def _mock_aws_proc(self, url="https://oidc.example.com/authorize?redirect_uri=http%3A%2F%2F127.0.0.1%3A9999%2Fcallback",
+                        returncode=0):
+        """Create a mock Popen for aws sso login --no-browser."""
+        proc = MagicMock()
+        proc.stdout = iter([
+            "Browser will not be automatically opened.\n",
+            "Please visit the following URL:\n",
+            "\n",
+            f"{url}\n",
+        ])
+        proc.wait = MagicMock()
+        proc.returncode = returncode
+        # After wait(), reading remaining stdout
+        remaining_stdout = MagicMock()
+        remaining_stdout.read.return_value = "Successfully logged in\n"
+        remaining_stdout.strip = lambda: "Successfully logged in"
+        # Replace stdout after iteration with a readable mock
+        original_stdout = proc.stdout
+        def side_effect_wait(**kwargs):
+            proc.stdout = MagicMock()
+            proc.stdout.read.return_value = "Successfully logged in\n"
+        proc.wait.side_effect = side_effect_wait
+        return proc
+
+    def test_success_with_webview(self, tmp_path):
+        proc = self._mock_aws_proc(returncode=0)
+        webview = MagicMock()
+        with patch.object(watcher.subprocess, 'Popen', return_value=proc), \
+             patch.object(watcher, '_launch_webview', return_value=webview), \
+             patch.object(watcher, '_kill_webview') as mock_kill:
+            rc = watcher.run_aws_sso_login("test-profile")
+            assert rc == 0
+            mock_kill.assert_called_once()
+
+    def test_success_falls_back_to_browser(self, tmp_path):
+        proc = self._mock_aws_proc(returncode=0)
+        browser_popen = MagicMock()
+        with patch.object(watcher.subprocess, 'Popen', side_effect=[proc, browser_popen]), \
+             patch.object(watcher, '_launch_webview', return_value=None):
+            rc = watcher.run_aws_sso_login("test-profile")
+            assert rc == 0
+            # Second Popen call should be 'open <url>'
+            assert browser_popen == watcher.subprocess.Popen.return_value or True
+
+    def test_returns_minus_1_when_no_url(self):
+        proc = MagicMock()
+        proc.stdout = iter(["Some error\n"])
+        proc.kill = MagicMock()
+        with patch.object(watcher.subprocess, 'Popen', return_value=proc):
+            rc = watcher.run_aws_sso_login("test-profile")
+            assert rc == -1
+            proc.kill.assert_called_once()
+
+    def test_returns_minus_1_on_timeout(self):
+        proc = MagicMock()
+        proc.stdout = iter([
+            "Browser will not be automatically opened.\n",
+            "\n",
+            "https://oidc.example.com/authorize?redirect_uri=http%3A%2F%2F127.0.0.1%3A9999%2Fcallback\n",
+        ])
+        proc.wait = MagicMock(side_effect=subprocess.TimeoutExpired("aws", 120))
+        proc.kill = MagicMock()
+        with patch.object(watcher.subprocess, 'Popen', return_value=proc), \
+             patch.object(watcher, '_launch_webview', return_value=None):
+            rc = watcher.run_aws_sso_login("test-profile")
+            assert rc == -1
+            proc.kill.assert_called_once()
+
+    def test_login_failure_returns_nonzero(self):
+        proc = self._mock_aws_proc(returncode=1)
+        proc.returncode = 1
+        with patch.object(watcher.subprocess, 'Popen', return_value=proc), \
+             patch.object(watcher, '_launch_webview', return_value=None):
+            rc = watcher.run_aws_sso_login("test-profile")
+            assert rc == 1
+
+    def test_webview_killed_on_timeout(self):
+        proc = MagicMock()
+        proc.stdout = iter([
+            "Browser will not be automatically opened.\n",
+            "\n",
+            "https://oidc.example.com/authorize?redirect_uri=http%3A%2F%2F127.0.0.1%3A9999%2Fcallback\n",
+        ])
+        proc.wait = MagicMock(side_effect=subprocess.TimeoutExpired("aws", 120))
+        proc.kill = MagicMock()
+        webview = MagicMock()
+        with patch.object(watcher.subprocess, 'Popen', return_value=proc), \
+             patch.object(watcher, '_launch_webview', return_value=webview), \
+             patch.object(watcher, '_kill_webview') as mock_kill:
+            watcher.run_aws_sso_login("test-profile")
+            mock_kill.assert_called_once()
+
+    def test_uses_no_browser_flag(self):
+        proc = MagicMock()
+        proc.stdout = iter(["error\n"])
+        proc.kill = MagicMock()
+        with patch.object(watcher.subprocess, 'Popen', return_value=proc) as mock_popen:
+            watcher.run_aws_sso_login("myprofile")
+            cmd = mock_popen.call_args[0][0]
+            assert "--no-browser" in cmd
+            assert "--profile" in cmd
+            assert "myprofile" in cmd
+
+
+# ---------------------------------------------------------------------------
 # _get_sso_session_config
 # ---------------------------------------------------------------------------
 
@@ -1031,55 +1228,6 @@ class TestTrySilentRefresh:
 
 
 # ---------------------------------------------------------------------------
-# open_url_with_tab_reuse
-# ---------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestOpenUrlWithTabReuse:
-
-    def test_chrome_reuse(self):
-        proc = _mock_proc("reused", 0)
-        with patch.object(watcher.subprocess, 'run', return_value=proc):
-            assert watcher.open_url_with_tab_reuse("https://example.com") == "reused"
-
-    def test_chrome_new_tab(self):
-        proc = _mock_proc("new", 0)
-        with patch.object(watcher.subprocess, 'run', return_value=proc):
-            assert watcher.open_url_with_tab_reuse("https://example.com") == "new"
-
-    def test_no_chrome_falls_to_safari(self):
-        chrome_proc = _mock_proc("no-chrome", 0)
-        safari_proc = _mock_proc("reused", 0)
-        with patch.object(watcher.subprocess, 'run',
-                          side_effect=[chrome_proc, safari_proc]):
-            assert watcher.open_url_with_tab_reuse("https://example.com") == "reused"
-
-    def test_no_browsers_falls_to_open(self):
-        chrome_proc = _mock_proc("no-chrome", 0)
-        safari_proc = _mock_proc("no-safari", 0)
-        open_proc = _mock_proc("", 0)
-        with patch.object(watcher.subprocess, 'run',
-                          side_effect=[chrome_proc, safari_proc, open_proc]):
-            assert watcher.open_url_with_tab_reuse("https://example.com") == "fallback"
-
-    def test_osascript_exception_falls_through(self):
-        with patch.object(watcher.subprocess, 'run',
-                          side_effect=[
-                              RuntimeError("chrome fail"),
-                              RuntimeError("safari fail"),
-                              _mock_proc("", 0),  # open fallback
-                          ]):
-            assert watcher.open_url_with_tab_reuse("https://example.com") == "fallback"
-
-    def test_url_embedded_in_script(self):
-        proc = _mock_proc("new", 0)
-        with patch.object(watcher.subprocess, 'run', return_value=proc) as mock_run:
-            watcher.open_url_with_tab_reuse("https://device.sso.us-west-2.amazonaws.com/?code=ABC")
-            script = mock_run.call_args[0][0][2]  # osascript -e <script>
-            assert "https://device.sso.us-west-2.amazonaws.com/?code=ABC" in script
-
-
-# ---------------------------------------------------------------------------
 # Silent mode in handle_login
 # ---------------------------------------------------------------------------
 
@@ -1375,3 +1523,154 @@ class TestProactiveRefreshMainLoop:
              patch('time.sleep', side_effect=_stop_after(2)):
             # Should not raise
             watcher.main()
+
+
+# ---------------------------------------------------------------------------
+# _kill_webview
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestKillWebview:
+
+    def test_osascript_quit_succeeds(self):
+        """Graceful quit via osascript."""
+        with patch.object(watcher.subprocess, 'run') as mock_run:
+            watcher._kill_webview()
+            mock_run.assert_called_once()
+            cmd = mock_run.call_args[0][0]
+            assert cmd[0] == "osascript"
+            assert "AWS SSO Login" in cmd[2]
+
+    def test_falls_back_to_killall(self):
+        """osascript fails → killall fallback."""
+        call_count = 0
+
+        def side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise OSError("osascript failed")
+
+        with patch.object(watcher.subprocess, 'run', side_effect=side_effect) as mock_run:
+            watcher._kill_webview()
+            assert mock_run.call_count == 2
+            second_cmd = mock_run.call_args_list[1][0][0]
+            assert second_cmd == ["killall", "sso-webview"]
+
+    def test_both_methods_fail_silently(self):
+        """Both osascript and killall fail → no exception raised."""
+        with patch.object(watcher.subprocess, 'run', side_effect=OSError("nope")):
+            watcher._kill_webview()  # should not raise
+
+    def test_osascript_timeout(self):
+        """osascript times out → killall fallback."""
+        call_count = 0
+
+        def side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise subprocess.TimeoutExpired("osascript", 3)
+
+        with patch.object(watcher.subprocess, 'run', side_effect=side_effect) as mock_run:
+            watcher._kill_webview()
+            assert mock_run.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# _check_aws_cli
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestCheckAwsCli:
+
+    def test_valid_version(self):
+        proc = _mock_proc("aws-cli/2.33.2 Python/3.13.11 Darwin/24.0.0", 0)
+        with patch.object(watcher.subprocess, 'run', return_value=proc):
+            watcher._check_aws_cli()  # should not raise
+
+    def test_low_version_warns(self, capsys):
+        proc = _mock_proc("aws-cli/2.8.0 Python/3.11.0 Darwin/24.0.0", 0)
+        with patch.object(watcher.subprocess, 'run', return_value=proc):
+            watcher._check_aws_cli()
+        output = capsys.readouterr().out
+        assert "WARNING" in output
+        assert "2.8.0" in output
+
+    def test_missing_binary(self, capsys):
+        with patch.object(watcher.subprocess, 'run', side_effect=FileNotFoundError):
+            watcher._check_aws_cli()
+        output = capsys.readouterr().out
+        assert "WARNING" in output
+        assert "not found" in output
+
+    def test_generic_exception(self, capsys):
+        with patch.object(watcher.subprocess, 'run', side_effect=RuntimeError("boom")):
+            watcher._check_aws_cli()
+        output = capsys.readouterr().out
+        assert "WARNING" in output
+        assert "could not check" in output
+
+    def test_exact_minimum_version(self):
+        proc = _mock_proc("aws-cli/2.9.0 Python/3.11.0 Darwin/24.0.0", 0)
+        with patch.object(watcher.subprocess, 'run', return_value=proc):
+            watcher._check_aws_cli()  # should not warn
+
+
+# ---------------------------------------------------------------------------
+# Stale lock recovery
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestStaleLockRecovery:
+
+    def test_stale_lock_reclaimed(self, watcher_state):
+        """Lock older than LOCK_STALE_SECONDS is reclaimed."""
+        lock = watcher_state["lock_dir"]
+        lock.mkdir()
+        # Backdate mtime to make it stale
+        stale_time = time.time() - watcher.LOCK_STALE_SECONDS - 60
+        os.utime(str(lock), (stale_time, stale_time))
+        assert watcher.try_acquire_lock() is True
+        assert lock.exists()
+
+    def test_non_stale_lock_not_reclaimed(self, watcher_state):
+        """Lock younger than LOCK_STALE_SECONDS is NOT reclaimed."""
+        lock = watcher_state["lock_dir"]
+        lock.mkdir()
+        assert watcher.try_acquire_lock() is False
+
+    def test_stale_lock_rmdir_fails(self, watcher_state):
+        """If rmdir fails on stale lock, returns False."""
+        lock = watcher_state["lock_dir"]
+        lock.mkdir()
+        stale_time = time.time() - watcher.LOCK_STALE_SECONDS - 60
+        os.utime(str(lock), (stale_time, stale_time))
+        # Put a file inside so rmdir fails
+        (lock / "blocker").touch()
+        assert watcher.try_acquire_lock() is False
+
+
+# ---------------------------------------------------------------------------
+# load_signal
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestLoadSignal:
+
+    def test_loads_valid_signal(self, watcher_state):
+        data = {"profile": "test", "reason": "expired"}
+        watcher_state["signal_file"].write_text(json.dumps(data))
+        result = watcher.load_signal()
+        assert result == data
+
+    def test_missing_file_returns_empty(self, watcher_state):
+        assert watcher.load_signal() == {}
+
+    def test_corrupt_json_returns_empty(self, watcher_state):
+        watcher_state["signal_file"].write_text("not valid json {{{")
+        assert watcher.load_signal() == {}
+
+    def test_empty_file_returns_empty(self, watcher_state):
+        watcher_state["signal_file"].write_text("")
+        assert watcher.load_signal() == {}

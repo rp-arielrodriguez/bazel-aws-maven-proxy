@@ -19,12 +19,12 @@ tests/
 │   └── sample_aws_config.ini
 └── unit/
     ├── test_s3proxy.py      # S3 proxy tests (19 tests)
-    └── test_watcher.py      # SSO watcher tests (125 tests)
+    └── test_watcher.py      # SSO watcher tests (137 tests)
 ```
 
 ## Test Coverage
 
-**144 passing tests** (19 s3proxy + 125 watcher)
+**172 passing tests** (19 s3proxy + 153 watcher)
 
 ### S3 Proxy Tests (`tests/unit/test_s3proxy.py`)
 
@@ -106,9 +106,19 @@ tests/
 - API failure, invalid JSON, no accessToken in response
 - Subprocess timeout, aws not found, cache write failure
 
-**Browser Tab Reuse — `TestOpenUrlWithTabReuse`** (6 tests):
-- Chrome reuse, Chrome new tab, fallback Chrome→Safari
-- No browsers falls to open, osascript exception, URL in script
+**URL Extraction — `TestExtractAuthorizeUrl`** (4 tests):
+- Extracts URL from stdout, returns None on missing/empty/no URL
+
+**Callback Host — `TestExtractCallbackHost`** (4 tests):
+- Extracts host:port from redirect_uri, handles missing/invalid URLs
+
+**Webview Launch — `TestLaunchWebview`** (3 tests):
+- Binary missing returns None, successful launch, Popen failure
+
+**SSO Login Flow — `TestRunAwsSsoLogin`** (7 tests):
+- Success with webview, fallback to browser, no URL returns -1
+- Timeout returns -1, login failure, webview killed on timeout
+- Uses --no-browser flag
 
 **Silent Mode Handle Login — `TestSilentModeHandleLogin`** (8 tests):
 - Silent mode success/failure, notify/auto try silent first
@@ -125,6 +135,18 @@ tests/
 **Proactive Refresh Main Loop — `TestProactiveRefreshMainLoop`** (6 tests):
 - Fires when near expiry, skips when healthy, skips with signal present
 - Skips in standalone, disabled when zero, failure doesn't crash
+
+**Webview Kill — `TestKillWebview`** (4 tests):
+- osascript quit, killall fallback, both fail silently, osascript timeout
+
+**AWS CLI Check — `TestCheckAwsCli`** (5 tests):
+- Valid version, low version warning, missing binary, generic exception, exact minimum
+
+**Stale Lock Recovery — `TestStaleLockRecovery`** (3 tests):
+- Stale lock reclaimed, non-stale not reclaimed, rmdir failure on stale lock
+
+**Signal Loading — `TestLoadSignal`** (4 tests):
+- Valid signal, missing file, corrupt JSON, empty file
 
 ## Running Tests
 
@@ -153,15 +175,12 @@ pytest --cov=s3proxy --cov-report=term-missing
 Available in `conftest.py`:
 
 - `temp_aws_dir` — Temporary AWS directory structure
-- `mock_aws_config` — Mock AWS config file
-- `mock_aws_credentials` — Mock credentials file
-- `create_sso_token_file` — Factory for SSO token files
-- `valid_sso_token` — Valid token (expires in 2 hours)
-- `expiring_sso_token` — Expiring token (30 minutes)
-- `expired_sso_token` — Already expired token
 - `mock_env_vars` — Mock environment variables
-- `mock_s3_bucket` — Mock S3 bucket with moto
-- `sample_maven_artifact` — Sample Maven artifact data
+- `reset_logging` — Autouse fixture to reset logging between tests
+
+Watcher-specific (in `test_watcher.py`):
+
+- `watcher_state` — Isolated state directory with signal, lock, mode files
 
 ## Adding Tests
 

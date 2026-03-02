@@ -14,10 +14,10 @@ SSO Watcher (launchd) detects signal
        ↓ success? done — no browser needed
        ↓ failed? fallback per mode:
        ↓   notify: Refresh/Snooze/Don't Remind dialog
-       ↓   auto: opens browser immediately
-       ↓   silent: gives up (no browser)
+       ↓   auto: opens webview immediately
+       ↓   silent: gives up (no webview/browser)
        ↓   standalone: idle (manual only)
-aws sso login opens browser (with tab reuse)
+aws sso login opens webview (or browser fallback)
        ↓ user completes MFA
 New credentials → ~/.aws/sso/cache/*.json
        ↓ both containers detect
@@ -31,7 +31,7 @@ S3 Proxy + Monitor reload (no restart)
 **Solution:**
 - Monitor (container) detects expiration, writes signal file
 - Watcher (host) reads signal, tries silent token refresh first
-- If silent refresh fails: asks user (notify), opens browser (auto), or gives up (silent)
+- If silent refresh fails: asks user (notify), opens webview (auto), or gives up (silent)
 - Proxy auto-reloads credentials without restart
 
 ## Components
@@ -44,8 +44,8 @@ Host daemon (launchd user agent) that:
 - If silent refresh succeeds: credentials renewed without browser, signal cleared
 - If silent refresh fails, falls back per mode:
   - `notify` (default): macOS dialog with Refresh/Snooze/Don't Remind
-  - `auto`: opens browser immediately for SSO login (with tab reuse)
-  - `silent`: returns failure — no browser fallback
+  - `auto`: opens webview immediately for SSO login
+  - `silent`: returns failure — no webview/browser fallback
   - `standalone`: watcher idles, manual `mise run sso-login` only
 - Uses atomic directory locking (`mkdir`)
 - Cooldown (default 600s) prevents popup spam after dismiss
@@ -112,11 +112,11 @@ mise run sso-logs             # Show recent logs (last 50 lines)
 mise run sso-logs:follow      # Stream logs (Ctrl+C to stop)
 mise run sso-mode             # Show current mode
 mise run sso-mode:notify      # Switch to notify (dialog)
-mise run sso-mode:auto        # Switch to auto (browser immediately)
+mise run sso-mode:auto        # Switch to auto (webview immediately)
 mise run sso-mode:silent      # Switch to silent (token refresh only)
 mise run sso-mode:standalone  # Switch to standalone (manual only)
 mise run sso-restart          # Restart watcher
-mise run sso-clean            # Clear state/signals
+mise run sso-clean            # Clear state/signals/cooldown
 ```
 
 ## Configuration
@@ -165,9 +165,27 @@ All modes except `standalone` try silent refresh before any user interaction:
 
 If any step fails, falls back to mode-specific behavior (dialog, browser, or nothing).
 
-### Browser Tab Reuse
+### Sandboxed Login Webview
 
-When browser login is needed (notify/auto modes), the watcher reuses existing AWS SSO tabs instead of opening new ones. Checks Chrome first, then Safari, then falls back to system default.
+When browser login is needed (notify/auto modes), the watcher opens a dedicated macOS webview window instead of a browser tab. Built with Swift/WKWebView at install time.
+
+**Benefits:**
+- No browser tab pollution (dedicated window, auto-closes on auth)
+- Persistent cookie storage (Google/IdP credentials cached across launches)
+- OAuth callback detection (signals parent process on completion)
+
+**Flow:**
+1. `aws sso login --no-browser` → gets OIDC authorize URL (~0.5s)
+2. Webview opens URL in a dedicated "AWS SSO Login" window
+3. User completes auth in webview
+4. OAuth callback redirects to localhost → webview detects, signals, exits
+5. `aws sso login` receives callback, writes new token
+
+**First login:** The webview starts with no cached state, so the first login requires full IdP credentials (email, password, MFA). These are cached in the webview's persistent cookie store — subsequent logins skip straight to MFA or auto-complete entirely, depending on IdP session policy. The cache persists across webview launches until the IdP session expires (controlled by your identity provider, typically hours to days).
+
+**Fallback:** If the webview binary is missing (e.g. `swiftc` unavailable), falls back to `open <url>` which opens the system browser.
+
+**Requires:** Xcode Command Line Tools (`xcode-select --install`). Built automatically by `mise run sso-install`.
 
 ### Atomic Locking
 
@@ -245,7 +263,7 @@ mise run containers:logs              # Check monitor is running
 ## Security
 
 - **No credential storage**: Watcher never handles credentials
-- **Browser-based auth**: Standard AWS SSO flow
+- **Webview-based auth**: Sandboxed login via dedicated webview (or browser fallback)
 - **MFA respected**: No bypass, user must complete
 - **User agent**: Runs as user, not root
 - **Lock prevents concurrency**: Single login at a time

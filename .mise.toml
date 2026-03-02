@@ -213,9 +213,9 @@ echo "✓ Removed signal files"
 rm -rf "$STATE_DIR/login.lock" 2>/dev/null || true
 echo "✓ Removed lock"
 
-# Optionally remove last-run timestamp (uncomment if needed)
-# rm -f "$STATE_DIR/last-login-at.txt" 2>/dev/null || true
-# echo "✓ Removed last-run timestamp"
+# Remove cooldown timestamp
+rm -f "$STATE_DIR/last-login-at.txt" 2>/dev/null || true
+echo "✓ Removed cooldown"
 
 echo ""
 echo "State cleaned"

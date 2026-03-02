@@ -80,11 +80,6 @@ def write_mode(mode: str) -> None:
     MODE_FILE.write_text(f"{mode}\n")
 
 
-def utc_now() -> datetime:
-    """Get current UTC time."""
-    return datetime.now(timezone.utc)
-
-
 def read_last_run() -> float | None:
     """Read last login attempt timestamp."""
     try:
@@ -357,90 +352,6 @@ def try_silent_refresh(profile: str) -> bool:
         return False
 
 
-# ---- Browser tab reuse ----
-
-_TAB_REUSE_SCRIPT_CHROME = '''
-tell application "System Events"
-    if not (exists process "Google Chrome") then return "no-chrome"
-end tell
-tell application "Google Chrome"
-    repeat with w in windows
-        set tabIndex to 0
-        repeat with t in tabs of w
-            set tabIndex to tabIndex + 1
-            if URL of t contains "device.sso" or URL of t contains ".amazonaws.com/authorize" or URL of t contains "awsapps.com" then
-                set URL of t to "{url}"
-                set active tab index of w to tabIndex
-                set index of w to 1
-                activate
-                return "reused"
-            end if
-        end repeat
-    end repeat
-    tell window 1
-        make new tab with properties {{URL:"{url}"}}
-    end tell
-    activate
-    return "new"
-end tell
-'''
-
-_TAB_REUSE_SCRIPT_SAFARI = '''
-tell application "System Events"
-    if not (exists process "Safari") then return "no-safari"
-end tell
-tell application "Safari"
-    repeat with w in windows
-        repeat with t in tabs of w
-            if URL of t contains "device.sso" or URL of t contains ".amazonaws.com/authorize" or URL of t contains "awsapps.com" then
-                set URL of t to "{url}"
-                set current tab of w to t
-                return "reused"
-            end if
-        end repeat
-    end repeat
-    tell window 1
-        set current tab to (make new tab with properties {{URL:"{url}"}})
-    end tell
-    activate
-    return "new"
-end tell
-'''
-
-
-def open_url_with_tab_reuse(url: str) -> str:
-    """
-    Open a URL, reusing an existing AWS SSO tab if one exists.
-
-    Tries Chrome first, then Safari, then falls back to `open <url>`.
-
-    Returns: "reused", "new", or "fallback"
-    """
-    for script_tpl in [_TAB_REUSE_SCRIPT_CHROME, _TAB_REUSE_SCRIPT_SAFARI]:
-        script = script_tpl.format(url=url)
-        try:
-            proc = subprocess.run(
-                ["osascript", "-e", script],
-                capture_output=True, text=True, timeout=10,
-            )
-            result = proc.stdout.strip()
-            if result in ("reused", "new"):
-                print(f"[sso-watcher] browser tab: {result}", flush=True)
-                return result
-            # "no-chrome" or "no-safari" — try next browser
-        except Exception:
-            continue
-
-    # Fallback: use system default
-    try:
-        subprocess.run(["open", url], timeout=10)
-        print("[sso-watcher] browser tab: fallback (open)", flush=True)
-        return "fallback"
-    except Exception as e:
-        print(f"[sso-watcher] failed to open URL: {e}", flush=True)
-        return "fallback"
-
-
 def should_trigger_login() -> bool:
     """
     Check if login should be triggered.
@@ -513,8 +424,9 @@ else if btn is "Snooze" then
 else if btn is "Don't Remind" then
     display dialog ¬
         "Reminders will be disabled until a new signal is received." & return & return & ¬
-        "To manually refresh credentials later, run:" & return & return & ¬
+        "To manually refresh credentials later, run either:" & return & return & ¬
         "    mise run sso-login" & return & ¬
+        "  or" & return & ¬
         "    aws sso login --profile {profile}" ¬
         with title "Disable SSO Reminders?" ¬
         with icon caution ¬
@@ -598,28 +510,95 @@ def show_notification(profile: str) -> str:
     return "dismiss"
 
 
-def _show_toast(message: str, title: str = "AWS SSO") -> None:
-    """Show a non-blocking macOS notification banner."""
+SSO_LOGIN_TIMEOUT = int(os.environ.get("SSO_LOGIN_TIMEOUT", "120"))  # seconds
+
+# Webview .app bundle path (built by sso-install.sh)
+WEBVIEW_APP = STATE_DIR / "bin" / "SSOLogin.app" / "Contents" / "MacOS" / "sso-webview"
+
+
+def _extract_authorize_url(proc: subprocess.Popen, timeout: float = 10) -> str | None:
+    """Read stdout from aws sso login --no-browser until we find the authorize URL."""
+    if proc.stdout is None:
+        return None
+    deadline = time.time() + timeout
+    for line in proc.stdout:
+        stripped = line.strip()
+        if stripped.startswith("https://"):
+            return stripped
+        if time.time() > deadline:
+            break
+    return None
+
+
+def _extract_callback_host(authorize_url: str) -> str:
+    """Extract callback host:port from the redirect_uri query parameter."""
     try:
-        subprocess.Popen(
-            ["osascript", "-e",
-             f'display notification "{message}" with title "{title}"'],
+        from urllib.parse import urlparse, parse_qs
+        params = parse_qs(urlparse(authorize_url).query)
+        redirect_uri = params.get("redirect_uri", [""])[0]
+        if redirect_uri:
+            parsed = urlparse(redirect_uri)
+            host = parsed.hostname or "127.0.0.1"
+            return f"{host}:{parsed.port}" if parsed.port else host
+    except Exception:
+        pass
+    return "127.0.0.1"
+
+
+def _kill_webview() -> None:
+    """Terminate the webview app if running.
+
+    Since the webview is launched via `open -a` (not direct exec), we
+    can't track its PID through the Popen object. Use osascript to
+    quit it gracefully, falling back to killall.
+    """
+    try:
+        subprocess.run(
+            ["osascript", "-e", 'tell application "AWS SSO Login" to quit'],
+            timeout=3, capture_output=True,
+        )
+    except Exception:
+        try:
+            subprocess.run(["killall", "sso-webview"], timeout=3, capture_output=True)
+        except Exception:
+            pass
+
+
+def _launch_webview(url: str, callback_host: str) -> subprocess.Popen | None:
+    """Launch the sandboxed webview .app bundle via macOS `open -a`.
+
+    Uses `open -a` instead of direct exec so macOS properly activates
+    the app window, even when called from a launchd background agent.
+
+    Returns Popen or None if unavailable.
+    """
+    app_bundle = WEBVIEW_APP.parent.parent.parent  # .../SSOLogin.app
+    if not WEBVIEW_APP.exists():
+        print("[sso-watcher] webview not found, will use system browser", flush=True)
+        return None
+    try:
+        return subprocess.Popen(
+            ["open", "-a", str(app_bundle), "--args", url, callback_host],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-    except Exception:
-        pass
-
-
-SSO_LOGIN_TIMEOUT = int(os.environ.get("SSO_LOGIN_TIMEOUT", "120"))  # seconds
+    except Exception as e:
+        print(f"[sso-watcher] webview launch failed: {e}", flush=True)
+        return None
 
 
 def run_aws_sso_login(profile: str | None = None) -> int:
     """
-    Run aws sso login with a timeout, reusing browser tabs when possible.
+    Run aws sso login using --no-browser with a sandboxed webview.
 
-    Uses BROWSER env var to intercept the URL that AWS CLI would open,
-    then opens it via AppleScript for tab reuse.
+    Flow:
+    1. Start `aws sso login --no-browser` to get the authorize URL
+    2. Launch sandboxed webview (or fall back to system browser)
+    3. Wait for aws sso login to complete (user does MFA)
+
+    The webview provides a dedicated window with persistent cookie
+    storage (Google/IdP credentials cached), no browser tab pollution,
+    and auto-close on callback detection.
 
     Args:
         profile: AWS profile to use (defaults to PROFILE env var)
@@ -628,63 +607,49 @@ def run_aws_sso_login(profile: str | None = None) -> int:
         Exit code from aws command (or -1 on timeout)
     """
     profile = profile or PROFILE
-    cmd = ["aws", "sso", "login", "--profile", profile]
+    cmd = ["aws", "sso", "login", "--no-browser", "--profile", profile]
     print(f"[sso-watcher] running: {' '.join(cmd)} (timeout={SSO_LOGIN_TIMEOUT}s)", flush=True)
 
-    # Create a temp script that opens URLs with tab reuse
-    browser_script = STATE_DIR / "open-sso-url.sh"
-    try:
-        STATE_DIR.mkdir(parents=True, exist_ok=True)
-        browser_script.write_text(
-            '#!/bin/bash\n'
-            'URL="$1"\n'
-            # Use osascript inline for tab reuse; fall back to open
-            'osascript -e "\n'
-            'tell application \\"System Events\\"\n'
-            '  if exists process \\"Google Chrome\\" then\n'
-            '    tell application \\"Google Chrome\\"\n'
-            '      repeat with w in windows\n'
-            '        set i to 0\n'
-            '        repeat with t in tabs of w\n'
-            '          set i to i + 1\n'
-            '          if URL of t contains \\"device.sso\\" or URL of t contains \\".amazonaws.com/authorize\\" or URL of t contains \\"awsapps.com\\" then\n'
-            '            set URL of t to \\"\'$URL\'\\"\n'
-            '            set active tab index of w to i\n'
-            '            set index of w to 1\n'
-            '            activate\n'
-            '            return\n'
-            '          end if\n'
-            '        end repeat\n'
-            '      end repeat\n'
-            '      tell window 1 to make new tab with properties {URL:\\"\'$URL\'\\"}\n'
-            '      activate\n'
-            '    end tell\n'
-            '    return\n'
-            '  end if\n'
-            'end tell\n'
-            'open location \\"\'$URL\'\\"\n'
-            '" 2>/dev/null || open "$URL"\n'
-        )
-        browser_script.chmod(0o755)
-        env = {**os.environ, "BROWSER": str(browser_script)}
-    except Exception:
-        # Fall back to default browser behavior
-        env = None
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    webview_proc = None
 
     try:
-        proc = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            timeout=SSO_LOGIN_TIMEOUT,
-            env=env,
-        )
-        print(proc.stdout, flush=True)
+        # Extract the authorize URL from aws cli output
+        url = _extract_authorize_url(proc)
+        if not url:
+            print("[sso-watcher] failed to extract authorize URL", flush=True)
+            proc.kill()
+            return -1
+
+        callback_host = _extract_callback_host(url)
+        print("[sso-watcher] authorize URL obtained, opening login window", flush=True)
+
+        # Try sandboxed webview first, fall back to system browser
+        webview_proc = _launch_webview(url, callback_host)
+        if webview_proc is None:
+            print("[sso-watcher] falling back to system browser", flush=True)
+            subprocess.Popen(["open", url])
+
+        # Wait for aws sso login to complete (blocks until MFA done or timeout)
+        proc.wait(timeout=SSO_LOGIN_TIMEOUT)
+        output = proc.stdout.read() if proc.stdout else ""
+        if output.strip():
+            print(output.strip(), flush=True)
         return proc.returncode
+
     except subprocess.TimeoutExpired:
         print(f"[sso-watcher] aws sso login timed out after {SSO_LOGIN_TIMEOUT}s", flush=True)
+        proc.kill()
         return -1
+    finally:
+        if webview_proc is not None:
+            _kill_webview()
 
 
 def clear_signal() -> None:
@@ -752,7 +717,7 @@ def handle_login(profile: str) -> str:
         print(f"[sso-watcher] dialog result: {action}", flush=True)
 
         if action == "refresh":
-            pass  # progress dialog shown by run_aws_sso_login
+            pass  # fall through to run_aws_sso_login below
         elif action.startswith("snooze:"):
             return action
         elif action == "suppress":
@@ -762,7 +727,7 @@ def handle_login(profile: str) -> str:
             return "dismiss"
 
     elif mode == "auto":
-        pass  # progress dialog shown by run_aws_sso_login
+        pass  # fall through to run_aws_sso_login below
 
     rc = run_aws_sso_login(profile)
     return "success" if rc == 0 else "failed"

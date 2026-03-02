@@ -29,8 +29,8 @@ Writes signal → ~/.aws/sso-renewer/login-required.json
        ↓ watcher polls every 5s
 SSO Watcher (launchd) detects signal
        ↓ silent refresh (all modes try first)
-       ↓ notify: dialog | auto: browser | silent: done | standalone: idle
-aws sso login → browser → user completes MFA
+       ↓ notify: dialog | auto: webview | silent: done | standalone: idle
+aws sso login → webview (or browser fallback) → user completes MFA
        ↓
 S3 Proxy + Monitor reload credentials (no restart)
 ```
@@ -45,6 +45,7 @@ See [docs/sso-watcher.md](docs/sso-watcher.md) for details.
 - AWS CLI v2 >= 2.9 (`brew install awscli`)
 - Python 3.11+
 - mise (`brew install mise`)
+- Xcode Command Line Tools (`xcode-select --install`) — for building the login webview
 
 ### 1. Configure AWS CLI with SSO
 
@@ -169,11 +170,11 @@ mise run sso-logs             # Show recent logs (last 50 lines)
 mise run sso-logs:follow      # Stream logs (Ctrl+C to stop)
 mise run sso-mode             # Show current mode
 mise run sso-mode:notify      # Switch to notify (dialog)
-mise run sso-mode:auto        # Switch to auto (browser immediately)
+mise run sso-mode:auto        # Switch to auto (webview immediately)
 mise run sso-mode:silent      # Switch to silent (token refresh only)
 mise run sso-mode:standalone  # Switch to standalone (manual only)
 mise run sso-restart          # Restart watcher
-mise run sso-clean            # Clear state/signals
+mise run sso-clean            # Clear state/signals/cooldown
 ```
 
 ### Watcher Modes
@@ -181,8 +182,8 @@ mise run sso-clean            # Clear state/signals
 | Mode | Behavior | Best for |
 |------|----------|----------|
 | `notify` (default) | Silent refresh, then dialog: Refresh / Snooze / Don't Remind | Daily use |
-| `auto` | Silent refresh, then opens browser immediately | Unattended |
-| `silent` | Silent token refresh only, never opens browser | Headless/CI |
+| `auto` | Silent refresh, then opens webview immediately | Unattended |
+| `silent` | Silent token refresh only, never opens webview/browser | Headless/CI |
 | `standalone` | Watcher idle, manual `sso-login` only | Full control |
 
 All modes except `standalone` attempt silent token refresh first using the cached refresh token. Only when that fails do they fall back to their mode-specific behavior.
@@ -242,7 +243,7 @@ aws sso login --profile bazel-cache  # Manual fallback
 ```bash
 mise run sso-status           # Check running/mode/credentials
 mise run sso-logs             # View recent logs
-mise run sso-clean            # Clear stuck state
+mise run sso-clean            # Clear stuck state/signals/cooldown
 ```
 
 ### S3 access
@@ -257,13 +258,13 @@ aws s3 ls s3://your-bucket/ --profile bazel-cache
 |----------|-------------|
 | [docs/sso-watcher.md](docs/sso-watcher.md) | SSO watcher architecture and internals |
 | [docs/state-machine.md](docs/state-machine.md) | State diagrams (Mermaid) for modes, signals, cooldown |
-| [docs/testing.md](docs/testing.md) | Test structure and coverage (144 tests) |
+| [docs/testing.md](docs/testing.md) | Test structure and coverage (172 tests) |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute |
 
 ## Testing
 
 ```bash
-pytest              # Run all 144 tests
+pytest              # Run all 172 tests
 ./run_tests.sh      # Helper script
 ```
 

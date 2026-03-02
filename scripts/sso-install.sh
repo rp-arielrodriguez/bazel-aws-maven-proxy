@@ -39,6 +39,28 @@ echo "  Cooldown: ${SSO_COOLDOWN_SECONDS}s"
 echo "  Poll interval: ${SSO_POLL_SECONDS}s"
 echo ""
 
+# ---- Build SSO login webview (.app bundle) ----
+WEBVIEW_SRC="$REPO_PATH/sso-watcher/webview/SSOLoginView.swift"
+WEBVIEW_PLIST="$REPO_PATH/sso-watcher/webview/Info.plist"
+WEBVIEW_APP_DIR="$HOME/.aws/sso-renewer/bin/SSOLogin.app"
+WEBVIEW_BIN="$WEBVIEW_APP_DIR/Contents/MacOS/sso-webview"
+
+if command -v swiftc &>/dev/null; then
+    echo "Building SSO login webview..."
+    mkdir -p "$WEBVIEW_APP_DIR/Contents/MacOS" "$WEBVIEW_APP_DIR/Contents/Resources"
+    if swiftc "$WEBVIEW_SRC" -o "$WEBVIEW_BIN" -framework Cocoa -framework WebKit 2>&1; then
+        cp "$WEBVIEW_PLIST" "$WEBVIEW_APP_DIR/Contents/Info.plist"
+        echo "✓ Built webview: $WEBVIEW_APP_DIR"
+    else
+        echo "⚠ Webview build failed (will fall back to system browser)"
+    fi
+else
+    echo "⚠ swiftc not found — install Xcode Command Line Tools for sandboxed login window"
+    echo "  Without it, SSO login will open in your default browser"
+    echo "  Install with: xcode-select --install"
+fi
+echo ""
+
 # Create LaunchAgents directory if it doesn't exist
 mkdir -p "$HOME/Library/LaunchAgents"
 

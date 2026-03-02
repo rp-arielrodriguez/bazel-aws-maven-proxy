@@ -41,11 +41,11 @@ mise run sso-logs             # Show recent logs (last 50 lines)
 mise run sso-logs:follow      # Stream logs (Ctrl+C to stop)
 mise run sso-mode             # Show current mode
 mise run sso-mode:notify      # Switch to notify (dialog)
-mise run sso-mode:auto        # Switch to auto (browser immediately)
+mise run sso-mode:auto        # Switch to auto (webview immediately)
 mise run sso-mode:silent      # Switch to silent (token refresh only)
 mise run sso-mode:standalone  # Switch to standalone (manual only)
 mise run sso-restart          # Restart watcher
-mise run sso-clean            # Clear state/signals
+mise run sso-clean            # Clear state/signals/cooldown
 ```
 
 ### Configuration
@@ -60,7 +60,7 @@ Environment variables in `.env` (copy from `.env.example`):
 - `CHECK_INTERVAL`: Monitor check interval in seconds (default: 60)
 - `SSO_COOLDOWN_SECONDS`: Watcher cooldown (default: 600)
 - `SSO_POLL_SECONDS`: Watcher poll interval (default: 5)
-- `SSO_LOGIN_MODE`: Login behavior - `notify` (default, dialog), `auto` (browser immediately), `silent` (token refresh only, no browser), `standalone` (manual only). Toggleable at runtime via `mise run sso-mode:*`
+- `SSO_LOGIN_MODE`: Login behavior - `notify` (default, dialog), `auto` (webview immediately), `silent` (token refresh only, no webview/browser), `standalone` (manual only). Toggleable at runtime via `mise run sso-mode:*`
 - `SSO_PROACTIVE_REFRESH_MINUTES`: Refresh token N min before expiry, 0 to disable (default: 30)
 - `CONTAINER_ENGINE`: `podman` or `docker` (auto-detect if unset, prefers podman)
 
@@ -97,12 +97,24 @@ Environment variables in `.env` (copy from `.env.example`):
   - Watches `~/.aws/sso-renewer/` for signal files
   - All modes except standalone try silent token refresh first (via cached refresh token)
   - In `notify` mode (default): silent refresh → dialog with Refresh/Snooze/Don't Remind
-  - In `auto` mode: silent refresh → opens browser immediately
-  - In `silent` mode: silent refresh only, never opens browser
+  - In `auto` mode: silent refresh → opens webview immediately
+  - In `silent` mode: silent refresh only, never opens webview/browser
   - In `standalone` mode: watcher idles, manual `mise run sso-login` only
   - Clears signal on success
   - Atomic locking, cooldown protection (default 600s)
 - **Installation**: `mise run sso-install`
+
+### SSO Login Webview (`sso-watcher/webview/`)
+- **Language**: Swift (compiled at install time via `swiftc`)
+- **Main file**: `sso-watcher/webview/SSOLoginView.swift`
+- **Purpose**: Sandboxed login window for SSO auth (replaces browser tabs)
+- **Key functionality**:
+  - WKWebView with persistent cookie storage (Google/IdP creds cached)
+  - OAuth callback detection via `WKNavigationDelegate`, auto-close on auth
+  - Launched via `open -a` for launchd compatibility
+  - Falls back to system browser if `swiftc` unavailable
+- **Bundle**: Built to `~/.aws/sso-renewer/bin/SSOLogin.app/` by `mise run sso-install`
+- **Requires**: Xcode Command Line Tools (`xcode-select --install`)
 
 
 ## State Machines
@@ -136,8 +148,8 @@ See [docs/state-machine.md](docs/state-machine.md) for formal state diagrams (Me
 └──────────────┬──────────────────────┘
                │ user clicks Refresh / auto
                ▼
-         aws sso login
-               │ opens browser
+         aws sso login --no-browser
+               │ opens webview (or browser fallback)
                ▼
     User completes SSO auth + MFA
                │
@@ -197,6 +209,6 @@ maven_install(
 
 Run tests:
 ```bash
-pytest
-./run_tests.sh
+pytest              # All tests (172)
+./run_tests.sh      # Helper script
 ```

@@ -58,7 +58,7 @@ stateDiagram-v2
 
 ## Auto Mode Flow
 
-Tries silent refresh first, then opens browser immediately. No dialog.
+Tries silent refresh first, then opens webview immediately. No dialog.
 
 ```mermaid
 stateDiagram-v2
