@@ -41,11 +41,12 @@ See [docs/sso-watcher.md](docs/sso-watcher.md) for details.
 
 ### Prerequisites
 
+- [mise](https://mise.jdx.dev/) (`brew install mise`) — manages Python and project tasks
+- [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) >= 2.9 (`brew install awscli`) — not managed by mise (no native ARM macOS build available via mise)
 - Podman (preferred) or Docker
-- AWS CLI v2 >= 2.9 (`brew install awscli`)
-- Python 3.11+
-- mise (`brew install mise`)
 - Xcode Command Line Tools (`xcode-select --install`) — for building the login webview
+
+> **Note:** Python 3.11 is managed by mise and installed automatically on `mise install`.
 
 ### 1. Configure AWS CLI with SSO
 

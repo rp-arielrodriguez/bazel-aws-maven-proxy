@@ -6,7 +6,7 @@ python = "3.11"
 
 [settings]
 # AWS CLI >= 2.9 required (refresh_token grant). Install via: brew install awscli
-# Not managed by mise — macOS .pkg installs don't work with aqua backend
+# Not managed by mise — no native ARM macOS build available via aqua/asdf backends
 
 [tasks.start]
 description = "Start complete system (containers + SSO watcher)"
