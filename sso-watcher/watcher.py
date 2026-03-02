@@ -332,7 +332,9 @@ def try_silent_refresh(profile: str) -> bool:
         with open(cache_path, "w") as f:
             json.dump(cache_data, f)
 
-        print("[sso-watcher] silent refresh successful", flush=True)
+        exp_str = cache_data.get("expiresAt", "unknown")
+        refresh_rotated = "yes" if new_refresh else "no"
+        print(f"[sso-watcher] silent refresh successful (expires={exp_str}, new_refresh_token={refresh_rotated})", flush=True)
         return True
     except Exception as e:
         print(f"[sso-watcher] silent refresh: failed to write cache: {e}", flush=True)
