@@ -1,6 +1,9 @@
 # mise configuration for bazel-aws-maven-proxy
 # https://mise.jdx.dev/
 
+[env]
+_.file = ".env"
+
 [tools]
 python = "3.11"
 
@@ -71,7 +74,6 @@ wait $!
 [tasks.sso-logout]
 description = "Logout from AWS SSO (invalidates credentials, triggers renewal)"
 run = """
-if [ -f .env ]; then source .env; fi
 AWS_PROFILE="${AWS_PROFILE:-default}"
 SIGNAL_DIR="$HOME/.aws/sso-renewer"
 
@@ -99,8 +101,6 @@ fi
 [tasks.sso-login]
 description = "Trigger SSO login (signal watcher or run directly in standalone mode)"
 run = """
-# Load .env to get correct AWS_PROFILE
-if [ -f .env ]; then source .env; fi
 SIGNAL_DIR="$HOME/.aws/sso-renewer"
 SIGNAL_FILE="$SIGNAL_DIR/login-required.json"
 MODE_FILE="$SIGNAL_DIR/mode"
@@ -148,7 +148,6 @@ MODE_FILE="$HOME/.aws/sso-renewer/mode"
 if [ -f "$MODE_FILE" ]; then
   MODE=$(cat "$MODE_FILE" | tr -d '[:space:]')
 else
-  if [ -f .env ]; then source .env; fi
   MODE="${SSO_LOGIN_MODE:-notify}"
 fi
 
