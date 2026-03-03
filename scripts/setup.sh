@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -eo pipefail
 
 # Interactive first-time setup for bazel-aws-maven-proxy
 # Checks prerequisites, configures .env, installs tools, starts services.
@@ -8,11 +8,17 @@ BOLD='\033[1m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 RED='\033[0;31m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
 ok()   { echo -e "  ${GREEN}✓${NC} $1"; }
 warn() { echo -e "  ${YELLOW}⚠${NC} $1"; }
 fail() { echo -e "  ${RED}✗${NC} $1"; }
+
+prompt() {
+    local var_name="$1" prompt_text="$2" default="$3" value
+    read -rp "  $prompt_text [$default]: " value
+    printf -v "$var_name" '%s' "${value:-$default}"
+}
 
 errors=0
 
@@ -23,7 +29,6 @@ echo -e "\n${BOLD}bazel-aws-maven-proxy setup${NC}\n"
 # -----------------------------------------------------------------------
 echo -e "${BOLD}Checking prerequisites...${NC}"
 
-# mise (if we got here via `mise run setup`, it's present, but check anyway)
 if command -v mise &>/dev/null; then
     ok "mise $(mise --version 2>&1 | head -1)"
 else
@@ -31,7 +36,6 @@ else
     errors=$((errors + 1))
 fi
 
-# AWS CLI
 if command -v aws &>/dev/null; then
     AWS_VERSION=$(aws --version 2>&1 | awk '{print $1}' | cut -d/ -f2)
     AWS_MAJOR=$(echo "$AWS_VERSION" | cut -d. -f1)
@@ -47,7 +51,6 @@ else
     errors=$((errors + 1))
 fi
 
-# Container engine
 if command -v podman &>/dev/null; then
     ok "podman $(podman --version 2>&1 | awk '{print $NF}')"
 elif command -v docker &>/dev/null; then
@@ -57,11 +60,8 @@ else
     errors=$((errors + 1))
 fi
 
-# swiftc (optional — webview)
-HAS_SWIFTC=false
 if command -v swiftc &>/dev/null; then
     ok "swiftc (Xcode CLT)"
-    HAS_SWIFTC=true
 else
     warn "swiftc not found — SSO login will use browser instead of webview"
     echo "       Install with: xcode-select --install"
@@ -79,31 +79,25 @@ echo ""
 # -----------------------------------------------------------------------
 echo -e "${BOLD}Configuring .env...${NC}"
 
-prompt() {
-    local var_name="$1" prompt_text="$2" default="$3" value
-    read -rp "  $prompt_text [$default]: " value
-    value="${value:-$default}"
-    eval "$var_name=\"$value\""
-}
-
+WRITE_ENV=true
 if [ -f .env ]; then
     echo "  .env already exists."
     read -rp "  Overwrite with fresh config? [y/N]: " overwrite
-    if [[ ! "$overwrite" =~ ^[Yy]$ ]]; then
+    if [[ "$overwrite" =~ ^[Yy]$ ]]; then
+        WRITE_ENV=true
+    else
         echo "  Keeping existing .env"
-        source .env
-        echo ""
+        WRITE_ENV=false
     fi
 fi
 
-# Only run interactive config if .env doesn't exist or user chose to overwrite
-if [ ! -f .env ] || [[ "${overwrite:-}" =~ ^[Yy]$ ]]; then
+if [ "$WRITE_ENV" = true ]; then
     echo ""
 
-    # List available AWS profiles for convenience
+    # List available AWS profiles
     if [ -f ~/.aws/config ]; then
         profiles=$(grep '^\[profile ' ~/.aws/config 2>/dev/null | sed 's/\[profile /  - /;s/\]//' || true)
-        if [ -n "$profiles" ]; then
+        if [ -n "${profiles:-}" ]; then
             echo "  Available AWS profiles:"
             echo "$profiles"
             echo ""
@@ -148,11 +142,17 @@ SSO_PROACTIVE_REFRESH_MINUTES=30
 EOF
 
     ok "Wrote .env"
-    echo ""
 fi
 
-# Source it for subsequent steps
+echo ""
+
+# Source .env for subsequent steps (set +u for optional vars)
+set +u
 source .env
+set -u
+
+AWS_PROFILE="${AWS_PROFILE:-default}"
+S3_BUCKET_NAME="${S3_BUCKET_NAME:-}"
 
 # -----------------------------------------------------------------------
 # 3. Install Python via mise
@@ -163,20 +163,19 @@ ok "Python $(python3 --version 2>&1 | awk '{print $2}')"
 echo ""
 
 # -----------------------------------------------------------------------
-# 4. Install SSO watcher (builds webview + launchd agent)
+# 4. Build webview + install launchd agent
 # -----------------------------------------------------------------------
 echo -e "${BOLD}Installing SSO watcher...${NC}"
 mise run sso-install
 echo ""
 
 # -----------------------------------------------------------------------
-# 5. Pre-flight: trigger macOS permission dialogs
+# 5. macOS permission pre-flight
 # -----------------------------------------------------------------------
 echo -e "${BOLD}Checking macOS permissions...${NC}"
 echo "  If prompted, grant permissions — these are needed for SSO login dialogs."
 echo ""
 
-# Trigger "System Events" / Accessibility permission by running a harmless osascript
 if osascript -e 'tell application "System Events" to return name of current user' &>/dev/null; then
     ok "System Events access"
 else
@@ -184,7 +183,6 @@ else
     echo "       Grant in: System Settings → Privacy & Security → Accessibility"
 fi
 
-# Trigger display dialog permission with a quick test
 if osascript -e 'display dialog "Setup complete — SSO watcher permissions verified." buttons {"OK"} default button "OK" giving up after 10' &>/dev/null; then
     ok "Dialog permissions"
 else
@@ -198,7 +196,6 @@ echo ""
 # -----------------------------------------------------------------------
 echo -e "${BOLD}Checking AWS SSO configuration...${NC}"
 
-AWS_PROFILE="${AWS_PROFILE:-default}"
 SSO_CONFIGURED=false
 
 if aws configure get sso_session --profile "$AWS_PROFILE" &>/dev/null; then
@@ -206,15 +203,15 @@ if aws configure get sso_session --profile "$AWS_PROFILE" &>/dev/null; then
     ok "Profile '$AWS_PROFILE' uses sso-session '$SSO_SESSION'"
     SSO_CONFIGURED=true
 elif aws configure get sso_account_id --profile "$AWS_PROFILE" &>/dev/null; then
-    ok "Profile '$AWS_PROFILE' has SSO configured (legacy style, no sso-session)"
+    ok "Profile '$AWS_PROFILE' has SSO configured (legacy style)"
     SSO_CONFIGURED=true
 else
     warn "Profile '$AWS_PROFILE' has no SSO configured"
     echo ""
     read -rp "  Configure SSO now? [Y/n/s(kip)]: " do_sso
-    if [[ "$do_sso" =~ ^[Ss]$ ]]; then
+    if [[ "${do_sso:-}" =~ ^[Ss]$ ]]; then
         echo "  Skipping SSO configuration."
-    elif [[ ! "$do_sso" =~ ^[Nn]$ ]]; then
+    elif [[ ! "${do_sso:-}" =~ ^[Nn]$ ]]; then
         echo ""
         echo "  When prompted for 'SSO registration scopes', press Enter to accept"
         echo "  the default (sso:account:access) — this enables token refresh."
@@ -232,24 +229,23 @@ fi
 echo ""
 
 # -----------------------------------------------------------------------
-# 7. First login via webview (caches IdP cookies for faster subsequent logins)
+# 7. First login via webview + validate access
 # -----------------------------------------------------------------------
 if [ "$SSO_CONFIGURED" = true ]; then
-    # Check if already authenticated
     if aws sts get-caller-identity --profile "$AWS_PROFILE" &>/dev/null; then
         ok "Credentials valid for profile '$AWS_PROFILE'"
     else
         echo -e "${BOLD}Initial SSO login...${NC}"
         echo "  Uses the sandboxed webview to cache IdP credentials for faster future logins."
         echo ""
-        # Use the watcher's login function — it handles --no-browser, webview, fallback
+        # Reuse the watcher's login function (handles --no-browser, webview, fallback)
         REPO_PATH="$(pwd)"
-        PYTHON_PATH="$(which python3)"
-        if "$PYTHON_PATH" -c "
-import sys; sys.path.insert(0, '$REPO_PATH/sso-watcher')
+        if python3 -c "
+import os, sys
+sys.path.insert(0, os.path.join(os.environ['REPO_PATH'], 'sso-watcher'))
 from watcher import run_aws_sso_login
-sys.exit(run_aws_sso_login('$AWS_PROFILE'))
-"; then
+sys.exit(run_aws_sso_login(os.environ['AWS_PROFILE']))
+" 2>&1; then
             ok "SSO login successful"
         else
             warn "SSO login failed — run 'mise run sso-login' to retry"
@@ -258,13 +254,10 @@ sys.exit(run_aws_sso_login('$AWS_PROFILE'))
 
     echo ""
 
-    # -----------------------------------------------------------------------
-    # 8. Validate S3 bucket access
-    # -----------------------------------------------------------------------
-    S3_BUCKET_NAME="${S3_BUCKET_NAME:-}"
+    # Validate S3 bucket access
     if [ -n "$S3_BUCKET_NAME" ] && [ "$S3_BUCKET_NAME" != "your-maven-bucket" ]; then
         echo -e "${BOLD}Validating S3 access...${NC}"
-        if aws s3 ls "s3://$S3_BUCKET_NAME/" --profile "$AWS_PROFILE" --max-items 1 &>/dev/null; then
+        if aws s3 ls "s3://$S3_BUCKET_NAME/" --profile "$AWS_PROFILE" 2>/dev/null | head -1 &>/dev/null; then
             ok "Can access s3://$S3_BUCKET_NAME/"
         else
             warn "Cannot access s3://$S3_BUCKET_NAME/ with profile '$AWS_PROFILE'"
@@ -275,10 +268,10 @@ sys.exit(run_aws_sso_login('$AWS_PROFILE'))
 fi
 
 # -----------------------------------------------------------------------
-# 9. Start containers
+# 8. Start containers
 # -----------------------------------------------------------------------
 read -rp "Start containers now? [Y/n]: " start_containers
-if [[ ! "$start_containers" =~ ^[Nn]$ ]]; then
+if [[ ! "${start_containers:-}" =~ ^[Nn]$ ]]; then
     mise run containers:up
     echo ""
     ok "Containers started"
