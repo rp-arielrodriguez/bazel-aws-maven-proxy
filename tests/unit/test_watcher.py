@@ -787,18 +787,22 @@ class TestRunAwsSsoLogin:
             "\n",
             f"{url}\n",
         ])
-        proc.wait = MagicMock()
         proc.returncode = returncode
-        # After wait(), reading remaining stdout
-        remaining_stdout = MagicMock()
-        remaining_stdout.read.return_value = "Successfully logged in\n"
-        remaining_stdout.strip = lambda: "Successfully logged in"
-        # Replace stdout after iteration with a readable mock
-        original_stdout = proc.stdout
-        def side_effect_wait(**kwargs):
-            proc.stdout = MagicMock()
-            proc.stdout.read.return_value = "Successfully logged in\n"
-        proc.wait.side_effect = side_effect_wait
+        # poll() returns None first (still running), then returncode
+        proc.poll = MagicMock(side_effect=[None, returncode])
+        # After poll() returns non-None, stdout.read() is called
+        proc._readable_stdout = MagicMock()
+        proc._readable_stdout.read.return_value = "Successfully logged in\n"
+        original_poll = proc.poll.side_effect
+        _call_count = [0]
+        def poll_side_effect():
+            _call_count[0] += 1
+            if _call_count[0] <= 1:
+                return None
+            # Replace stdout with readable mock before returning
+            proc.stdout = proc._readable_stdout
+            return returncode
+        proc.poll = MagicMock(side_effect=poll_side_effect)
         return proc
 
     def test_success_with_webview(self, tmp_path):
@@ -806,6 +810,7 @@ class TestRunAwsSsoLogin:
         webview = MagicMock()
         with patch.object(watcher.subprocess, 'Popen', return_value=proc), \
              patch.object(watcher, '_launch_webview', return_value=webview), \
+             patch.object(watcher, '_is_webview_running', return_value=True), \
              patch.object(watcher, '_kill_webview') as mock_kill:
             rc = watcher.run_aws_sso_login("test-profile")
             assert rc == 0
@@ -815,11 +820,10 @@ class TestRunAwsSsoLogin:
         proc = self._mock_aws_proc(returncode=0)
         browser_popen = MagicMock()
         with patch.object(watcher.subprocess, 'Popen', side_effect=[proc, browser_popen]), \
-             patch.object(watcher, '_launch_webview', return_value=None):
+             patch.object(watcher, '_launch_webview', return_value=None), \
+             patch.object(watcher, '_is_webview_running', return_value=True):
             rc = watcher.run_aws_sso_login("test-profile")
             assert rc == 0
-            # Second Popen call should be 'open <url>'
-            assert browser_popen == watcher.subprocess.Popen.return_value or True
 
     def test_returns_minus_1_when_no_url(self):
         proc = MagicMock()
@@ -837,17 +841,17 @@ class TestRunAwsSsoLogin:
             "\n",
             "https://oidc.example.com/authorize?redirect_uri=http%3A%2F%2F127.0.0.1%3A9999%2Fcallback\n",
         ])
-        proc.wait = MagicMock(side_effect=subprocess.TimeoutExpired("aws", 120))
+        proc.poll = MagicMock(return_value=None)  # never finishes
         proc.kill = MagicMock()
         with patch.object(watcher.subprocess, 'Popen', return_value=proc), \
-             patch.object(watcher, '_launch_webview', return_value=None):
+             patch.object(watcher, '_launch_webview', return_value=None), \
+             patch.object(watcher, 'SSO_LOGIN_TIMEOUT', 0):  # immediate timeout
             rc = watcher.run_aws_sso_login("test-profile")
             assert rc == -1
             proc.kill.assert_called_once()
 
     def test_login_failure_returns_nonzero(self):
         proc = self._mock_aws_proc(returncode=1)
-        proc.returncode = 1
         with patch.object(watcher.subprocess, 'Popen', return_value=proc), \
              patch.object(watcher, '_launch_webview', return_value=None):
             rc = watcher.run_aws_sso_login("test-profile")
@@ -860,14 +864,35 @@ class TestRunAwsSsoLogin:
             "\n",
             "https://oidc.example.com/authorize?redirect_uri=http%3A%2F%2F127.0.0.1%3A9999%2Fcallback\n",
         ])
-        proc.wait = MagicMock(side_effect=subprocess.TimeoutExpired("aws", 120))
+        proc.poll = MagicMock(return_value=None)  # never finishes
         proc.kill = MagicMock()
         webview = MagicMock()
         with patch.object(watcher.subprocess, 'Popen', return_value=proc), \
              patch.object(watcher, '_launch_webview', return_value=webview), \
-             patch.object(watcher, '_kill_webview') as mock_kill:
+             patch.object(watcher, '_is_webview_running', return_value=True), \
+             patch.object(watcher, '_kill_webview') as mock_kill, \
+             patch.object(watcher, 'SSO_LOGIN_TIMEOUT', 0):  # immediate timeout
             watcher.run_aws_sso_login("test-profile")
             mock_kill.assert_called_once()
+
+    def test_webview_closed_aborts_login(self):
+        """When user closes webview, aws process is killed immediately."""
+        proc = MagicMock()
+        proc.stdout = iter([
+            "Browser will not be automatically opened.\n",
+            "\n",
+            "https://oidc.example.com/authorize?redirect_uri=http%3A%2F%2F127.0.0.1%3A9999%2Fcallback\n",
+        ])
+        proc.poll = MagicMock(return_value=None)  # aws still running
+        proc.kill = MagicMock()
+        webview = MagicMock()
+        with patch.object(watcher.subprocess, 'Popen', return_value=proc), \
+             patch.object(watcher, '_launch_webview', return_value=webview), \
+             patch.object(watcher, '_is_webview_running', return_value=False), \
+             patch.object(watcher, '_kill_webview'):
+            rc = watcher.run_aws_sso_login("test-profile")
+            assert rc == -1
+            proc.kill.assert_called_once()
 
     def test_uses_no_browser_flag(self):
         proc = MagicMock()

@@ -545,6 +545,18 @@ def _extract_callback_host(authorize_url: str) -> str:
     return "127.0.0.1"
 
 
+def _is_webview_running() -> bool:
+    """Check if the webview app is still running."""
+    try:
+        result = subprocess.run(
+            ["pgrep", "-f", "SSOLogin.app"],
+            capture_output=True, timeout=3,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
 def _kill_webview() -> None:
     """Terminate the webview app if running.
 
@@ -636,17 +648,28 @@ def run_aws_sso_login(profile: str | None = None) -> int:
             print("[sso-watcher] falling back to system browser", flush=True)
             subprocess.Popen(["open", url])
 
-        # Wait for aws sso login to complete (blocks until MFA done or timeout)
-        proc.wait(timeout=SSO_LOGIN_TIMEOUT)
-        output = proc.stdout.read() if proc.stdout else ""
-        if output.strip():
-            print(output.strip(), flush=True)
-        return proc.returncode
+        # Poll aws process, also watch for webview exit (user closed window)
+        deadline = time.time() + SSO_LOGIN_TIMEOUT
+        while True:
+            rc = proc.poll()
+            if rc is not None:
+                output = proc.stdout.read() if proc.stdout else ""
+                if output.strip():
+                    print(output.strip(), flush=True)
+                return rc
 
-    except subprocess.TimeoutExpired:
-        print(f"[sso-watcher] aws sso login timed out after {SSO_LOGIN_TIMEOUT}s", flush=True)
-        proc.kill()
-        return -1
+            # If webview exited (user closed window), kill aws immediately
+            if webview_proc is not None and not _is_webview_running():
+                print("[sso-watcher] webview closed, aborting login", flush=True)
+                proc.kill()
+                return -1
+
+            if time.time() > deadline:
+                print(f"[sso-watcher] aws sso login timed out after {SSO_LOGIN_TIMEOUT}s", flush=True)
+                proc.kill()
+                return -1
+
+            time.sleep(0.5)
     finally:
         if webview_proc is not None:
             _kill_webview()

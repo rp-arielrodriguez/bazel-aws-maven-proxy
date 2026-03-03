@@ -247,6 +247,16 @@ if [ "$SSO_CONFIGURED" = true ]; then
         echo -e "${BOLD}Initial SSO login...${NC}"
         echo "  Uses the sandboxed webview to cache IdP credentials for faster future logins."
         echo ""
+
+        # Pause watcher during setup login to prevent duplicate dialogs
+        SIGNAL_DIR="$HOME/.aws/sso-renewer"
+        SAVED_MODE=""
+        if [ -f "$SIGNAL_DIR/mode" ]; then
+            SAVED_MODE=$(cat "$SIGNAL_DIR/mode" 2>/dev/null)
+        fi
+        mkdir -p "$SIGNAL_DIR"
+        echo "standalone" > "$SIGNAL_DIR/mode"
+
         # Reuse the watcher's login function (handles --no-browser, webview, fallback)
         export REPO_PATH="$(pwd)"
         export AWS_PROFILE
@@ -259,6 +269,13 @@ sys.exit(run_aws_sso_login(os.environ.get('AWS_PROFILE', 'default')))
             ok "SSO login successful"
         else
             warn "SSO login failed — run 'mise run sso-login' to retry"
+        fi
+
+        # Restore watcher mode
+        if [ -n "$SAVED_MODE" ]; then
+            echo "$SAVED_MODE" > "$SIGNAL_DIR/mode"
+        else
+            rm -f "$SIGNAL_DIR/mode"
         fi
     fi
 
