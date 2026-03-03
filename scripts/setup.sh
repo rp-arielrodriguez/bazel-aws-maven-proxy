@@ -112,11 +112,11 @@ if [ ! -f .env ] || [[ "${overwrite:-}" =~ ^[Yy]$ ]]; then
     prompt AWS_REGION   "AWS region"            "us-west-2"
     prompt S3_BUCKET    "S3 bucket name"        "your-maven-bucket"
     prompt PROXY_PORT   "Local proxy port"      "8888"
-    echo "  SSO login modes (all try silent token refresh first):"
-    echo "    notify     — dialog prompt on credential expiration (default)"
-    echo "    auto       — open webview on credential expiration"
-    echo "    silent     — no UI, silent refresh only"
-    echo "    standalone — watcher idles, manual login only"
+    echo "  SSO login modes:"
+    echo "    notify     — asks before opening SSO login (default)"
+    echo "    auto       — automatically opens SSO login when needed"
+    echo "    silent     — background token refresh only, no UI"
+    echo "    standalone — manual only (mise run sso-login)"
     prompt SSO_MODE     "SSO login mode" "notify"
 
     cat > .env <<EOF
