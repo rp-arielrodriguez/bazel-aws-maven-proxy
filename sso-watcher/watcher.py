@@ -637,6 +637,18 @@ def _launch_webview(url: str, callback_host: str) -> subprocess.Popen | None:
         return None
 
 
+def _check_credentials_valid(profile: str) -> bool:
+    """Quick check if AWS credentials are currently valid."""
+    try:
+        proc = subprocess.run(
+            ["aws", "sts", "get-caller-identity", "--profile", profile],
+            capture_output=True, timeout=10,
+        )
+        return proc.returncode == 0
+    except Exception:
+        return False
+
+
 def run_aws_sso_login(profile: str | None = None) -> int:
     """
     Run aws sso login using --no-browser with a sandboxed webview.
@@ -649,6 +661,11 @@ def run_aws_sso_login(profile: str | None = None) -> int:
     The webview provides a dedicated window with persistent cookie
     storage (Google/IdP credentials cached), no browser tab pollution,
     and auto-close on callback detection.
+
+    Secondary exit: if aws sso login hangs but credentials become valid
+    (e.g. after sleep/wake where the CLI stalls on token exchange), we
+    detect this via periodic sts get-caller-identity checks and exit
+    successfully.
 
     Args:
         profile: AWS profile to use (defaults to PROFILE env var)
@@ -692,6 +709,8 @@ def run_aws_sso_login(profile: str | None = None) -> int:
 
         # Poll aws process, also watch for webview exit (user closed window)
         deadline = time.time() + SSO_LOGIN_TIMEOUT
+        last_cred_check = 0
+        cred_check_interval = 15  # seconds between credential checks
         while True:
             rc = proc.poll()
             if rc is not None:
@@ -715,6 +734,17 @@ def run_aws_sso_login(profile: str | None = None) -> int:
                     print("[sso-watcher] aws did not finish after webview close, aborting", flush=True)
                     proc.kill()
                     return -1
+
+            # Secondary exit: credentials became valid while aws CLI hangs.
+            # This handles post-sleep scenarios where the CLI stalls on
+            # token exchange but auth actually succeeded (webview shows portal).
+            now = time.time()
+            if now - last_cred_check >= cred_check_interval:
+                last_cred_check = now
+                if _check_credentials_valid(profile):
+                    print("[sso-watcher] credentials valid (detected during wait), killing stale aws process", flush=True)
+                    proc.kill()
+                    return 0
 
             if time.time() > deadline:
                 print(f"[sso-watcher] aws sso login timed out after {SSO_LOGIN_TIMEOUT}s", flush=True)
@@ -897,9 +927,16 @@ def main() -> int:
                         write_last_run(time.time())
                         print("[sso-watcher] dismissed, retry after cooldown", flush=True)
                     elif result == "failed":
-                        # Login failed or timed out — short delay then re-show dialog
-                        print("[sso-watcher] login failed, will retry in 30s", flush=True)
-                        update_signal_snooze(30)
+                        # Login may have timed out but auth could have succeeded
+                        # (e.g. post-sleep: webview completed but aws CLI hung).
+                        # Check credentials before retrying.
+                        if _check_credentials_valid(profile):
+                            write_last_run(time.time())
+                            clear_signal()
+                            print("[sso-watcher] login reported failed but credentials valid, signal cleared", flush=True)
+                        else:
+                            print("[sso-watcher] login failed, will retry in 30s", flush=True)
+                            update_signal_snooze(30)
                     else:
                         print(f"[sso-watcher] unexpected result: {result}", flush=True)
 

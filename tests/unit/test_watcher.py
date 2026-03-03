@@ -373,9 +373,23 @@ class TestMainLoopNotifyMode:
              patch.object(watcher, 'COOLDOWN_SECONDS', 0), \
              patch.object(watcher, 'show_notification', return_value="refresh"), \
              patch.object(watcher, 'run_aws_sso_login', return_value=1), \
+             patch.object(watcher, '_check_credentials_valid', return_value=False), \
              patch('time.sleep', side_effect=_stop_after(2)):
             watcher.main()
         assert watcher_state["signal_file"].exists()
+
+    def test_login_failure_but_credentials_valid_clears_signal(self, watcher_state):
+        """When login times out but auth actually succeeded (post-sleep), clear signal."""
+        write_signal(watcher_state["signal_file"])
+        with          patch.object(watcher, 'read_mode', return_value='notify'), \
+             patch.object(watcher, 'POLL_SECONDS', 0), \
+             patch.object(watcher, 'COOLDOWN_SECONDS', 0), \
+             patch.object(watcher, 'show_notification', return_value="refresh"), \
+             patch.object(watcher, 'run_aws_sso_login', return_value=1), \
+             patch.object(watcher, '_check_credentials_valid', return_value=True), \
+             patch('time.sleep', side_effect=_stop_after(2)):
+            watcher.main()
+        assert not watcher_state["signal_file"].exists()
 
     def test_snooze_writes_next_attempt(self, watcher_state):
         write_signal(watcher_state["signal_file"])

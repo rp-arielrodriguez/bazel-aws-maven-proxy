@@ -235,13 +235,13 @@ aws s3 ls s3://your-bucket/ --profile bazel-cache
 |----------|-------------|
 | [docs/sso-watcher.md](docs/sso-watcher.md) | SSO watcher architecture and internals |
 | [docs/state-machine.md](docs/state-machine.md) | State diagrams (Mermaid) for modes, signals, cooldown |
-| [docs/testing.md](docs/testing.md) | Test structure and coverage (174 tests) |
+| [docs/testing.md](docs/testing.md) | Test structure and coverage (175 tests) |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute |
 
 ## Testing
 
 ```bash
-pytest              # Run all 174 tests
+pytest              # Run all 175 tests
 ./run_tests.sh      # Helper script
 ```
 
