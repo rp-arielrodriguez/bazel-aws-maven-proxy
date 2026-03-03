@@ -85,7 +85,7 @@ macOS launchd configuration with:
 ## Installation
 
 ```bash
-# Configure in .env
+# In .env — must match a profile in ~/.aws/config with SSO configured
 AWS_PROFILE=bazel-cache
 SSO_COOLDOWN_SECONDS=600
 SSO_POLL_SECONDS=5

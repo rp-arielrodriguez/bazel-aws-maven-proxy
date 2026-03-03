@@ -57,10 +57,12 @@ mise run setup
 This interactive wizard will:
 - Verify prerequisites (aws, podman/docker, swiftc)
 - Prompt for AWS profile, region, S3 bucket, and create `.env`
-- Run `aws configure sso` if your profile isn't configured yet
+- Run `aws configure sso` if your profile isn't configured yet (creates a new one)
 - Install Python via mise
 - Build the login webview and install the SSO watcher (launchd)
 - Optionally start containers
+
+> **Profile note:** `AWS_PROFILE` in `.env` must match a profile name in `~/.aws/config` with SSO configured. If you already have a profile with access to the S3 bucket, enter that name during setup. If not, the setup wizard will run `aws configure sso` to create one — the profile name you choose there must match what goes in `.env`. All components (proxy, monitor, watcher) read this single value.
 
 <details>
 <summary>Manual setup (alternative)</summary>
@@ -83,7 +85,8 @@ See [`examples/aws_config_example`](examples/aws_config_example) for a fully ann
 **Create .env:**
 ```bash
 cp .env.example .env
-# Edit: AWS_PROFILE, AWS_REGION, S3_BUCKET_NAME
+# Set AWS_PROFILE to the profile name from above (e.g. bazel-cache)
+# Set AWS_REGION and S3_BUCKET_NAME for your S3 bucket
 ```
 
 **Install and start:**
@@ -185,7 +188,7 @@ Environment variables in `.env`:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `AWS_PROFILE` | AWS CLI profile | `default` |
+| `AWS_PROFILE` | AWS CLI profile name (must exist in `~/.aws/config` with SSO) | `default` |
 | `AWS_REGION` | AWS region for S3 | `us-west-2` |
 | `S3_BUCKET_NAME` | Maven S3 bucket name | Required |
 | `PROXY_PORT` | Local proxy port | `8888` |
