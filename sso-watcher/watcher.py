@@ -700,11 +700,21 @@ def run_aws_sso_login(profile: str | None = None) -> int:
                     print(output.strip(), flush=True)
                 return rc
 
-            # If webview exited (user closed window), kill aws immediately
+            # If webview exited, give aws a few seconds to finish (callback
+            # may have been detected and webview auto-closed — aws needs time
+            # to complete the token exchange). Only abort if aws doesn't finish.
             if webview_proc is not None and not _is_webview_running():
-                print("[sso-watcher] webview closed, aborting login", flush=True)
-                proc.kill()
-                return -1
+                print("[sso-watcher] webview closed, waiting for aws to finish...", flush=True)
+                try:
+                    proc.wait(timeout=10)
+                    output = proc.stdout.read() if proc.stdout else ""
+                    if output.strip():
+                        print(output.strip(), flush=True)
+                    return proc.returncode
+                except subprocess.TimeoutExpired:
+                    print("[sso-watcher] aws did not finish after webview close, aborting", flush=True)
+                    proc.kill()
+                    return -1
 
             if time.time() > deadline:
                 print(f"[sso-watcher] aws sso login timed out after {SSO_LOGIN_TIMEOUT}s", flush=True)

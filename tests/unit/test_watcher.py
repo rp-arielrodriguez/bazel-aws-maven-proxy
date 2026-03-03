@@ -875,15 +875,46 @@ class TestRunAwsSsoLogin:
             watcher.run_aws_sso_login("test-profile")
             mock_kill.assert_called_once()
 
-    def test_webview_closed_aborts_login(self):
-        """When user closes webview, aws process is killed immediately."""
+    def test_webview_closed_aws_finishes(self):
+        """When webview closes and aws finishes within grace period, return its exit code."""
         proc = MagicMock()
         proc.stdout = iter([
             "Browser will not be automatically opened.\n",
             "\n",
             "https://oidc.example.com/authorize?redirect_uri=http%3A%2F%2F127.0.0.1%3A9999%2Fcallback\n",
         ])
-        proc.poll = MagicMock(return_value=None)  # aws still running
+        proc.poll = MagicMock(return_value=None)  # aws still running when polled
+        proc.wait = MagicMock()  # but finishes during grace period
+        proc.returncode = 0
+        readable_stdout = MagicMock()
+        readable_stdout.read.return_value = ""
+        proc.stdout = iter([
+            "Browser will not be automatically opened.\n",
+            "\n",
+            "https://oidc.example.com/authorize?redirect_uri=http%3A%2F%2F127.0.0.1%3A9999%2Fcallback\n",
+        ])
+        def wait_side_effect(**kwargs):
+            proc.stdout = readable_stdout
+        proc.wait.side_effect = wait_side_effect
+        webview = MagicMock()
+        with patch.object(watcher.subprocess, 'Popen', return_value=proc), \
+             patch.object(watcher, '_launch_webview', return_value=webview), \
+             patch.object(watcher, '_is_webview_running', return_value=False), \
+             patch.object(watcher, '_kill_webview'):
+            rc = watcher.run_aws_sso_login("test-profile")
+            assert rc == 0
+            proc.wait.assert_called_once()
+
+    def test_webview_closed_aws_timeout_aborts(self):
+        """When webview closes and aws doesn't finish in grace period, kill it."""
+        proc = MagicMock()
+        proc.stdout = iter([
+            "Browser will not be automatically opened.\n",
+            "\n",
+            "https://oidc.example.com/authorize?redirect_uri=http%3A%2F%2F127.0.0.1%3A9999%2Fcallback\n",
+        ])
+        proc.poll = MagicMock(return_value=None)
+        proc.wait = MagicMock(side_effect=subprocess.TimeoutExpired("aws", 10))
         proc.kill = MagicMock()
         webview = MagicMock()
         with patch.object(watcher.subprocess, 'Popen', return_value=proc), \
