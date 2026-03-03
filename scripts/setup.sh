@@ -58,8 +58,10 @@ else
 fi
 
 # swiftc (optional — webview)
+HAS_SWIFTC=false
 if command -v swiftc &>/dev/null; then
     ok "swiftc (Xcode CLT)"
+    HAS_SWIFTC=true
 else
     warn "swiftc not found — SSO login will use browser instead of webview"
     echo "       Install with: xcode-select --install"
@@ -153,39 +155,7 @@ fi
 source .env
 
 # -----------------------------------------------------------------------
-# 3. Verify AWS SSO is configured
-# -----------------------------------------------------------------------
-echo -e "${BOLD}Checking AWS SSO configuration...${NC}"
-
-AWS_PROFILE="${AWS_PROFILE:-default}"
-if aws configure get sso_session --profile "$AWS_PROFILE" &>/dev/null; then
-    SSO_SESSION=$(aws configure get sso_session --profile "$AWS_PROFILE" 2>/dev/null)
-    ok "Profile '$AWS_PROFILE' uses sso-session '$SSO_SESSION'"
-elif aws configure get sso_account_id --profile "$AWS_PROFILE" &>/dev/null; then
-    ok "Profile '$AWS_PROFILE' has SSO configured (legacy style, no sso-session)"
-else
-    warn "Profile '$AWS_PROFILE' has no SSO configured"
-    echo ""
-    read -rp "  Configure SSO now? [Y/n/s(kip permanently)]: " do_sso
-    if [[ "$do_sso" =~ ^[Ss]$ ]]; then
-        echo "  Skipping SSO configuration."
-    elif [[ ! "$do_sso" =~ ^[Nn]$ ]]; then
-        echo ""
-        echo "  When prompted for 'SSO registration scopes', press Enter to accept"
-        echo "  the default (sso:account:access) — this enables token refresh."
-        echo ""
-        if ! aws configure sso; then
-            warn "aws configure sso failed — run 'aws configure sso' manually"
-        fi
-    else
-        echo "  Skipping. Run 'aws configure sso' before starting services."
-    fi
-fi
-
-echo ""
-
-# -----------------------------------------------------------------------
-# 4. Install Python via mise
+# 3. Install Python via mise
 # -----------------------------------------------------------------------
 echo -e "${BOLD}Installing tools via mise...${NC}"
 mise install --yes
@@ -193,14 +163,14 @@ ok "Python $(python3 --version 2>&1 | awk '{print $2}')"
 echo ""
 
 # -----------------------------------------------------------------------
-# 5. Install SSO watcher (builds webview + launchd agent)
+# 4. Install SSO watcher (builds webview + launchd agent)
 # -----------------------------------------------------------------------
 echo -e "${BOLD}Installing SSO watcher...${NC}"
 mise run sso-install
 echo ""
 
 # -----------------------------------------------------------------------
-# 6. Pre-flight: trigger macOS permission dialogs
+# 5. Pre-flight: trigger macOS permission dialogs
 # -----------------------------------------------------------------------
 echo -e "${BOLD}Checking macOS permissions...${NC}"
 echo "  If prompted, grant permissions — these are needed for SSO login dialogs."
@@ -224,7 +194,88 @@ fi
 echo ""
 
 # -----------------------------------------------------------------------
-# 7. Start containers
+# 6. Configure AWS SSO if needed
+# -----------------------------------------------------------------------
+echo -e "${BOLD}Checking AWS SSO configuration...${NC}"
+
+AWS_PROFILE="${AWS_PROFILE:-default}"
+SSO_CONFIGURED=false
+
+if aws configure get sso_session --profile "$AWS_PROFILE" &>/dev/null; then
+    SSO_SESSION=$(aws configure get sso_session --profile "$AWS_PROFILE" 2>/dev/null)
+    ok "Profile '$AWS_PROFILE' uses sso-session '$SSO_SESSION'"
+    SSO_CONFIGURED=true
+elif aws configure get sso_account_id --profile "$AWS_PROFILE" &>/dev/null; then
+    ok "Profile '$AWS_PROFILE' has SSO configured (legacy style, no sso-session)"
+    SSO_CONFIGURED=true
+else
+    warn "Profile '$AWS_PROFILE' has no SSO configured"
+    echo ""
+    read -rp "  Configure SSO now? [Y/n/s(kip)]: " do_sso
+    if [[ "$do_sso" =~ ^[Ss]$ ]]; then
+        echo "  Skipping SSO configuration."
+    elif [[ ! "$do_sso" =~ ^[Nn]$ ]]; then
+        echo ""
+        echo "  When prompted for 'SSO registration scopes', press Enter to accept"
+        echo "  the default (sso:account:access) — this enables token refresh."
+        echo ""
+        if aws configure sso; then
+            SSO_CONFIGURED=true
+        else
+            warn "aws configure sso failed — run 'aws configure sso' manually"
+        fi
+    else
+        echo "  Skipping. Run 'aws configure sso' before starting services."
+    fi
+fi
+
+echo ""
+
+# -----------------------------------------------------------------------
+# 7. First login via webview (caches IdP cookies for faster subsequent logins)
+# -----------------------------------------------------------------------
+if [ "$SSO_CONFIGURED" = true ]; then
+    # Check if already authenticated
+    if aws sts get-caller-identity --profile "$AWS_PROFILE" &>/dev/null; then
+        ok "Credentials valid for profile '$AWS_PROFILE'"
+    else
+        echo -e "${BOLD}Initial SSO login...${NC}"
+        echo "  Uses the sandboxed webview to cache IdP credentials for faster future logins."
+        echo ""
+        # Use the watcher's login function — it handles --no-browser, webview, fallback
+        REPO_PATH="$(pwd)"
+        PYTHON_PATH="$(which python3)"
+        if "$PYTHON_PATH" -c "
+import sys; sys.path.insert(0, '$REPO_PATH/sso-watcher')
+from watcher import run_aws_sso_login
+sys.exit(run_aws_sso_login('$AWS_PROFILE'))
+"; then
+            ok "SSO login successful"
+        else
+            warn "SSO login failed — run 'mise run sso-login' to retry"
+        fi
+    fi
+
+    echo ""
+
+    # -----------------------------------------------------------------------
+    # 8. Validate S3 bucket access
+    # -----------------------------------------------------------------------
+    S3_BUCKET_NAME="${S3_BUCKET_NAME:-}"
+    if [ -n "$S3_BUCKET_NAME" ] && [ "$S3_BUCKET_NAME" != "your-maven-bucket" ]; then
+        echo -e "${BOLD}Validating S3 access...${NC}"
+        if aws s3 ls "s3://$S3_BUCKET_NAME/" --profile "$AWS_PROFILE" --max-items 1 &>/dev/null; then
+            ok "Can access s3://$S3_BUCKET_NAME/"
+        else
+            warn "Cannot access s3://$S3_BUCKET_NAME/ with profile '$AWS_PROFILE'"
+            echo "       Verify the profile has the correct role and permissions."
+        fi
+        echo ""
+    fi
+fi
+
+# -----------------------------------------------------------------------
+# 9. Start containers
 # -----------------------------------------------------------------------
 read -rp "Start containers now? [Y/n]: " start_containers
 if [[ ! "$start_containers" =~ ^[Nn]$ ]]; then
