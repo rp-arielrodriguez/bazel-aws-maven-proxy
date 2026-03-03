@@ -16,7 +16,7 @@ fail() { echo -e "  ${RED}✗${NC} $1"; }
 
 prompt() {
     local var_name="$1" prompt_text="$2" default="$3" value
-    read -rp "  $prompt_text [$default]: " value
+    read -rp "  $prompt_text [$default]: " value || true
     printf -v "$var_name" '%s' "${value:-$default}"
 }
 
@@ -82,7 +82,7 @@ echo -e "${BOLD}Configuring .env...${NC}"
 WRITE_ENV=true
 if [ -f .env ]; then
     echo "  .env already exists."
-    read -rp "  Overwrite with fresh config? [y/N]: " overwrite
+    read -rp "  Overwrite with fresh config? [y/N]: " overwrite || true
     if [[ "$overwrite" =~ ^[Yy]$ ]]; then
         WRITE_ENV=true
     else
@@ -117,14 +117,14 @@ if [ "$WRITE_ENV" = true ]; then
 
     cat > .env <<EOF
 # AWS Configuration
-AWS_PROFILE=${AWS_PROFILE}
-AWS_REGION=${AWS_REGION}
+AWS_PROFILE="${AWS_PROFILE}"
+AWS_REGION="${AWS_REGION}"
 
 # S3 Bucket Information
-S3_BUCKET_NAME=${S3_BUCKET}
+S3_BUCKET_NAME="${S3_BUCKET}"
 
 # Proxy Configuration
-PROXY_PORT=${PROXY_PORT}
+PROXY_PORT="${PROXY_PORT}"
 REFRESH_INTERVAL=60000
 LOG_LEVEL=info
 
@@ -134,7 +134,7 @@ CHECK_INTERVAL=60
 # SSO Watcher Configuration (macOS launchd)
 SSO_COOLDOWN_SECONDS=600
 SSO_POLL_SECONDS=5
-SSO_LOGIN_MODE=${SSO_MODE}
+SSO_LOGIN_MODE="${SSO_MODE}"
 SSO_PROACTIVE_REFRESH_MINUTES=30
 
 # Container Engine (auto-detect if unset)
@@ -146,10 +146,9 @@ fi
 
 echo ""
 
-# Source .env for subsequent steps (set +u for optional vars)
+# Source .env for subsequent steps (unset vars are OK)
 set +u
 source .env
-set -u
 
 AWS_PROFILE="${AWS_PROFILE:-default}"
 S3_BUCKET_NAME="${S3_BUCKET_NAME:-}"
@@ -158,7 +157,9 @@ S3_BUCKET_NAME="${S3_BUCKET_NAME:-}"
 # 3. Install Python via mise
 # -----------------------------------------------------------------------
 echo -e "${BOLD}Installing tools via mise...${NC}"
-mise install --yes
+if ! mise install --yes; then
+    warn "mise install failed — you may need to run 'mise install' manually"
+fi
 ok "Python $(python3 --version 2>&1 | awk '{print $2}')"
 echo ""
 
@@ -166,27 +167,35 @@ echo ""
 # 4. Build webview + install launchd agent
 # -----------------------------------------------------------------------
 echo -e "${BOLD}Installing SSO watcher...${NC}"
-mise run sso-install
+if ! mise run sso-install; then
+    warn "SSO watcher install failed — run 'mise run sso-install' manually"
+fi
 echo ""
 
 # -----------------------------------------------------------------------
 # 5. macOS permission pre-flight
 # -----------------------------------------------------------------------
 echo -e "${BOLD}Checking macOS permissions...${NC}"
-echo "  If prompted, grant permissions — these are needed for SSO login dialogs."
-echo ""
 
-if osascript -e 'tell application "System Events" to return name of current user' &>/dev/null; then
-    ok "System Events access"
+# Skip permission checks in headless/SSH sessions (no GUI)
+if [ -z "${DISPLAY:-}" ] && [ -z "${TERM_PROGRAM:-}" ] && ! pgrep -q WindowServer 2>/dev/null; then
+    warn "No GUI session detected (SSH?) — skipping permission pre-flight"
 else
-    warn "System Events access denied — SSO dialog notifications may not work"
-    echo "       Grant in: System Settings → Privacy & Security → Accessibility"
-fi
+    echo "  If prompted, grant permissions — these are needed for SSO login dialogs."
+    echo ""
 
-if osascript -e 'display dialog "Setup complete — SSO watcher permissions verified." buttons {"OK"} default button "OK" giving up after 10' &>/dev/null; then
-    ok "Dialog permissions"
-else
-    warn "Dialog display failed — SSO notifications may not appear"
+    if osascript -e 'tell application "System Events" to return name of current user' &>/dev/null; then
+        ok "System Events access"
+    else
+        warn "System Events access denied — SSO dialog notifications may not work"
+        echo "       Grant in: System Settings → Privacy & Security → Accessibility"
+    fi
+
+    if osascript -e 'display dialog "Setup complete — SSO watcher permissions verified." buttons {"OK"} default button "OK" giving up after 10' &>/dev/null; then
+        ok "Dialog permissions"
+    else
+        warn "Dialog display failed — SSO notifications may not appear"
+    fi
 fi
 
 echo ""
@@ -208,7 +217,7 @@ elif aws configure get sso_account_id --profile "$AWS_PROFILE" &>/dev/null; then
 else
     warn "Profile '$AWS_PROFILE' has no SSO configured"
     echo ""
-    read -rp "  Configure SSO now? [Y/n/s(kip)]: " do_sso
+    read -rp "  Configure SSO now? [Y/n/s(kip)]: " do_sso || true
     if [[ "${do_sso:-}" =~ ^[Ss]$ ]]; then
         echo "  Skipping SSO configuration."
     elif [[ ! "${do_sso:-}" =~ ^[Nn]$ ]]; then
@@ -216,7 +225,7 @@ else
         echo "  When prompted for 'SSO registration scopes', press Enter to accept"
         echo "  the default (sso:account:access) — this enables token refresh."
         echo ""
-        if aws configure sso; then
+        if aws configure sso --profile "$AWS_PROFILE"; then
             SSO_CONFIGURED=true
         else
             warn "aws configure sso failed — run 'aws configure sso' manually"
@@ -239,12 +248,13 @@ if [ "$SSO_CONFIGURED" = true ]; then
         echo "  Uses the sandboxed webview to cache IdP credentials for faster future logins."
         echo ""
         # Reuse the watcher's login function (handles --no-browser, webview, fallback)
-        REPO_PATH="$(pwd)"
+        export REPO_PATH="$(pwd)"
+        export AWS_PROFILE
         if python3 -c "
 import os, sys
 sys.path.insert(0, os.path.join(os.environ['REPO_PATH'], 'sso-watcher'))
 from watcher import run_aws_sso_login
-sys.exit(run_aws_sso_login(os.environ['AWS_PROFILE']))
+sys.exit(run_aws_sso_login(os.environ.get('AWS_PROFILE', 'default')))
 " 2>&1; then
             ok "SSO login successful"
         else
@@ -270,7 +280,7 @@ fi
 # -----------------------------------------------------------------------
 # 8. Start containers
 # -----------------------------------------------------------------------
-read -rp "Start containers now? [Y/n]: " start_containers
+read -rp "Start containers now? [Y/n]: " start_containers || true
 if [[ ! "${start_containers:-}" =~ ^[Nn]$ ]]; then
     mise run containers:up
     echo ""

@@ -73,7 +73,7 @@ stateDiagram-v2
 
 ## Silent Mode Flow
 
-Tries silent token refresh only. Never opens browser.
+Tries silent token refresh only. Never opens webview/browser.
 
 ```mermaid
 stateDiagram-v2

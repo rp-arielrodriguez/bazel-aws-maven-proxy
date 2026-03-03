@@ -65,7 +65,7 @@ Host daemon (launchd user agent) that:
 ### `launchd/com.bazel.sso-watcher.plist`
 
 macOS launchd configuration with:
-- User agent (not daemon) for browser access
+- User agent (not daemon) for GUI/webview access
 - Environment variables from `.env`
 - Logging to `~/Library/Logs/sso-watcher.{log,error.log}`
 - KeepAlive for automatic restart
@@ -239,7 +239,7 @@ mise run sso-logs           # View recent logs
 mise run sso-uninstall && mise run sso-install  # Reinstall
 ```
 
-### Browser not opening
+### Webview not opening
 
 - Check mode: `mise run sso-mode` — in `notify` mode, you must click "Refresh"
 - In `silent` mode, only token refresh is attempted — no browser fallback
@@ -250,13 +250,13 @@ mise run sso-uninstall && mise run sso-install  # Reinstall
 ### Signal file stuck
 
 ```bash
-mise run sso-clean                    # Clear state
+mise run sso-clean                    # Clear state, signals, and cooldown
 mise run containers:logs              # Check monitor is running
 ```
 
 ### Multiple login popups
 
-- Use `notify` mode (default) — browser only opens on user confirmation
+- Use `notify` mode (default) — webview only opens on user confirmation
 - Increase `SSO_COOLDOWN_SECONDS` in `.env`
 - Or switch to `standalone` for full manual control
 

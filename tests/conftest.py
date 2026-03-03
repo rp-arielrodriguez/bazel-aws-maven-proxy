@@ -1,8 +1,6 @@
 """
 Shared pytest fixtures for bazel-aws-maven-proxy tests.
 """
-import os
-
 import pytest
 
 
@@ -25,9 +23,8 @@ def mock_env_vars(temp_aws_dir, monkeypatch):
         "AWS_PROFILE": "bazel-cache",
         "AWS_REGION": "sa-east-1",
         "S3_BUCKET_NAME": "test-maven-bucket",
-        "PROXY_PORT": "9000",
+        "PROXY_PORT": "8888",
         "CHECK_INTERVAL": "60",
-        "RENEWAL_THRESHOLD": "3600",
         "LOG_LEVEL": "DEBUG",
         "HOME": str(temp_aws_dir.parent)
     }

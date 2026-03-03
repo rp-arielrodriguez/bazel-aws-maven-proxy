@@ -6,7 +6,7 @@ Contributions welcome. This is a focused tool — keep changes simple and aligne
 
 ```bash
 # Clone and install dependencies
-git clone https://github.com/your-org/bazel-aws-maven-proxy.git
+git clone https://github.com/rp-arielrodriguez/bazel-aws-maven-proxy.git
 cd bazel-aws-maven-proxy
 pip install -r tests/requirements.txt
 

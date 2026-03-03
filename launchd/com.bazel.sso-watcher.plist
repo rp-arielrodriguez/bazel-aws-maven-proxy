@@ -32,17 +32,13 @@
 		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
 	</dict>
 
-	<!-- Run in user session (allows browser interaction) -->
+	<!-- Run in user session (allows webview interaction) -->
 	<key>RunAtLoad</key>
 	<true/>
 
 	<!-- Keep alive - restart if crashes -->
 	<key>KeepAlive</key>
 	<true/>
-
-	<!-- Restart after successful exit -->
-	<key>SuccessfulExit</key>
-	<false/>
 
 	<!-- Throttle restarts to prevent crash loops -->
 	<key>ThrottleInterval</key>
@@ -56,7 +52,7 @@
 	<key>StandardErrorPath</key>
 	<string>{{HOME}}/Library/Logs/sso-watcher.error.log</string>
 
-	<!-- Process type (allows GUI interaction for browser) -->
+	<!-- Process type (allows GUI interaction for webview) -->
 	<key>ProcessType</key>
 	<string>Interactive</string>
 

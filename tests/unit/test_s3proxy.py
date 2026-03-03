@@ -5,7 +5,6 @@ import os
 import sys
 from pathlib import Path
 from unittest.mock import patch, MagicMock
-import tempfile
 
 import pytest
 from botocore.exceptions import ClientError

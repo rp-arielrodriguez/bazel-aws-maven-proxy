@@ -8,18 +8,18 @@ services:
       - AWS_PROFILE=${AWS_PROFILE:-default}
       - AWS_REGION=${AWS_REGION:-us-west-2}
       - S3_BUCKET_NAME=${S3_BUCKET_NAME}
-      - PROXY_PORT=${PROXY_PORT:-9000}
+      - PROXY_PORT=${PROXY_PORT:-8888}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - REFRESH_INTERVAL=${REFRESH_INTERVAL:-60000}
     ports:
-      - "${PROXY_PORT:-9000}:${PROXY_PORT:-9000}"
+      - "${PROXY_PORT:-8888}:${PROXY_PORT:-8888}"
     volumes:
       - ${HOME}/.aws/config:/root/.aws/config:ro
       - ${HOME}/.aws/sso/cache:/root/.aws/sso/cache:rw
       - maven-cache:/data
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:${PROXY_PORT:-9000}/healthz"]
+      test: ["CMD", "curl", "-f", "http://localhost:${PROXY_PORT:-8888}/healthz"]
       interval: 30s
       timeout: 10s
       retries: 3

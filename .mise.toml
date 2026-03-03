@@ -133,7 +133,7 @@ else
 EOF
 
   if [ "$MODE" = "auto" ]; then
-    echo "✓ Signal created, watcher will open browser within ${SSO_POLL_SECONDS:-5}s"
+    echo "✓ Signal created, watcher will open webview within ${SSO_POLL_SECONDS:-5}s"
   else
     echo "✓ Signal created, watcher will show dialog within ${SSO_POLL_SECONDS:-5}s"
   fi
@@ -154,18 +154,18 @@ fi
 
 case "$MODE" in
   standalone) DESC="idle, manual login only" ;;
-  auto)       DESC="opens browser on expiry" ;;
-  silent)     DESC="token refresh only, no browser" ;;
-  notify)     DESC="asks before opening browser" ;;
+  auto)       DESC="opens webview on expiry" ;;
+  silent)     DESC="token refresh only, no webview" ;;
+  notify)     DESC="asks before opening webview" ;;
   *)          DESC="unknown" ;;
 esac
 
 echo "Current mode: $MODE — $DESC"
 echo ""
 echo "Available modes:"
-echo "  notify      asks before opening browser (default)"
-echo "  auto        opens browser immediately on expiry"
-echo "  silent      token refresh only, no browser"
+echo "  notify      asks before opening webview (default)"
+echo "  auto        opens webview immediately on expiry"
+echo "  silent      token refresh only, no webview"
 echo "  standalone  watcher idle, manual login only"
 echo ""
 echo "Switch with: mise run sso-mode:notify|auto|silent|standalone"
@@ -180,7 +180,7 @@ echo "✓ Switched to notify mode (takes effect within ${SSO_POLL_SECONDS:-5}s)"
 """
 
 [tasks."sso-mode:auto"]
-description = "Switch watcher to auto mode (open browser immediately)"
+description = "Switch watcher to auto mode (open webview immediately)"
 run = """
 mkdir -p "$HOME/.aws/sso-renewer"
 echo "auto" > "$HOME/.aws/sso-renewer/mode"
@@ -188,11 +188,11 @@ echo "✓ Switched to auto mode (takes effect within ${SSO_POLL_SECONDS:-5}s)"
 """
 
 [tasks."sso-mode:silent"]
-description = "Switch watcher to silent mode (token refresh only, no browser)"
+description = "Switch watcher to silent mode (token refresh only, no webview)"
 run = """
 mkdir -p "$HOME/.aws/sso-renewer"
 echo "silent" > "$HOME/.aws/sso-renewer/mode"
-echo "✓ Switched to silent mode — refresh token only, no browser (takes effect within ${SSO_POLL_SECONDS:-5}s)"
+echo "✓ Switched to silent mode — refresh token only, no webview (takes effect within ${SSO_POLL_SECONDS:-5}s)"
 """
 
 [tasks."sso-mode:standalone"]
@@ -204,7 +204,7 @@ echo "✓ Switched to standalone mode — watcher idle, use 'mise run sso-login'
 """
 
 [tasks.sso-clean]
-description = "Clean SSO watcher state and signal files"
+description = "Clean SSO watcher state, signal files, and cooldown"
 run = """
 STATE_DIR="$HOME/.aws/sso-renewer"
 

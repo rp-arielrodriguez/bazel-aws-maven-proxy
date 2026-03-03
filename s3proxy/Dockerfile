@@ -33,11 +33,11 @@ ENV PYTHONUNBUFFERED=1 \
     CACHE_DIR=/data
 
 # Expose the proxy port
-EXPOSE ${PROXY_PORT:-9000}
+EXPOSE ${PROXY_PORT:-8888}
 
 # Health check using the application's health endpoint
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-  CMD curl -f http://localhost:${PROXY_PORT:-9000}/healthz || exit 1
+  CMD curl -f http://localhost:${PROXY_PORT:-8888}/healthz || exit 1
 
 # Run the application
 CMD ["python", "app.py"]

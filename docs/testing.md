@@ -19,7 +19,7 @@ tests/
 │   └── sample_aws_config.ini
 └── unit/
     ├── test_s3proxy.py      # S3 proxy tests (19 tests)
-    └── test_watcher.py      # SSO watcher tests (137 tests)
+    └── test_watcher.py      # SSO watcher tests (153 tests)
 ```
 
 ## Test Coverage

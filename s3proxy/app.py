@@ -366,42 +366,9 @@ def directory_listing(s3_client, prefix):
     
     return Response(full_html, mimetype='text/html')
 
-def mirror_popular_artifacts():
-    """
-    Background task to periodically mirror popular artifacts from S3.
-    This ensures that commonly accessed artifacts are already cached
-    before they are requested.
-    """
-    logger.info("Starting background mirroring task")
-    
-    while True:
-        try:
-            # Get the current S3 client
-            s3 = get_s3_client()
-            
-            # TODO: Implement logic to determine which artifacts are "popular"
-            # and should be pre-cached. For now, this is just a placeholder.
-            # This could be based on access logs, a predefined list, etc.
-            
-            # Sleep for the refresh interval
-            time.sleep(REFRESH_INTERVAL)
-        except Exception as e:
-            logger.error(f"Error in background mirroring task: {str(e)}")
-            # Sleep for a shorter time on error
-            time.sleep(60)
-
-def start_background_tasks():
-    """Start background tasks in separate threads."""
-    # Start the mirroring task
-    mirror_thread = threading.Thread(target=mirror_popular_artifacts, daemon=True)
-    mirror_thread.start()
-
 if __name__ == '__main__':
     # Ensure cache directory exists
     create_cache_dir_if_not_exists()
-    
-    # Start background tasks
-    start_background_tasks()
     
     # Log startup
     logger.info(f"Starting S3 proxy for bucket: {S3_BUCKET_NAME}")
@@ -410,4 +377,4 @@ if __name__ == '__main__':
     logger.info(f"Cache directory: {CACHE_DIR}")
     
     # Run the Flask app
-    app.run(host='0.0.0.0', port=int(os.environ.get('PROXY_PORT', 9000)))
+    app.run(host='0.0.0.0', port=int(os.environ.get('PROXY_PORT', 8888)))
