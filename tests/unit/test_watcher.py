@@ -136,6 +136,13 @@ class TestClearSignal:
     def test_clear_nonexistent_signal(self, watcher_state):
         watcher.clear_signal()
 
+    def test_clear_permission_error_does_not_crash(self, watcher_state):
+        """PermissionError on unlink is caught, not propagated."""
+        mock_signal = MagicMock()
+        mock_signal.unlink.side_effect = PermissionError("denied")
+        with patch.object(watcher, 'SIGNAL_FILE', mock_signal):
+            watcher.clear_signal()  # should not raise
+
 
 @pytest.mark.unit
 class TestUpdateSignalSnooze:
@@ -242,6 +249,35 @@ class TestShowNotification:
         with patch.object(watcher.subprocess, 'run', return_value=proc):
             assert watcher.show_notification("default") == "dismiss"
 
+    def test_empty_output_with_success_rc(self):
+        """osascript returns empty string with rc=0 → dismiss."""
+        proc = _mock_proc("", 0)
+        with patch.object(watcher.subprocess, 'run', return_value=proc):
+            assert watcher.show_notification("default") == "dismiss"
+
+    def test_garbage_output_with_success_rc(self):
+        """osascript returns unexpected output → dismiss."""
+        proc = _mock_proc("something unexpected", 0)
+        with patch.object(watcher.subprocess, 'run', return_value=proc):
+            assert watcher.show_notification("default") == "dismiss"
+
+    def test_profile_with_quotes_escaped(self):
+        """Profile with double quotes is escaped for AppleScript."""
+        proc = _mock_proc("Refresh", 0)
+        with patch.object(watcher.subprocess, 'run', return_value=proc) as mock_run:
+            watcher.show_notification('my"profile')
+            script = mock_run.call_args[0][0][2]
+            assert 'my\\"profile' in script
+            assert 'my"profile' not in script
+
+    def test_profile_with_backslash_escaped(self):
+        """Profile with backslash is escaped for AppleScript."""
+        proc = _mock_proc("Refresh", 0)
+        with patch.object(watcher.subprocess, 'run', return_value=proc) as mock_run:
+            watcher.show_notification('my\\profile')
+            script = mock_run.call_args[0][0][2]
+            assert 'my\\\\profile' in script
+
 
 # ---------------------------------------------------------------------------
 # handle_login
@@ -293,6 +329,26 @@ class TestHandleLogin:
              patch.object(watcher, '_run_notify_login', return_value="dismiss") as mock_notify:
             watcher.handle_login("staging")
             mock_notify.assert_called_once_with("staging")
+
+    def test_auto_mode_timeout_returns_failed(self):
+        """Auto mode: run_aws_sso_login returns -1 (timeout) → 'failed'."""
+        with patch.object(watcher, 'read_mode', return_value='auto'), \
+             patch.object(watcher, 'run_aws_sso_login', return_value=-1):
+            assert watcher.handle_login("default") == "failed"
+
+    def test_notify_mode_exception_propagates(self):
+        """Exception in _run_notify_login propagates to caller."""
+        with patch.object(watcher, 'read_mode', return_value='notify'), \
+             patch.object(watcher, '_run_notify_login', side_effect=RuntimeError("boom")):
+            with pytest.raises(RuntimeError, match="boom"):
+                watcher.handle_login("default")
+
+    def test_silent_refresh_exception_propagates(self):
+        """Exception in try_silent_refresh propagates to caller."""
+        with patch.object(watcher, 'read_mode', return_value='notify'), \
+             patch.object(watcher, 'try_silent_refresh', side_effect=RuntimeError("crash")):
+            with pytest.raises(RuntimeError, match="crash"):
+                watcher.handle_login("default")
 
 
 # ---------------------------------------------------------------------------
@@ -433,6 +489,76 @@ class TestMainLoopNotifyMode:
              patch('time.sleep', side_effect=_stop_after(1)):
             watcher.main()
         mock_notify.assert_called_once_with("fallback-profile")
+
+    def test_unexpected_result_does_not_crash(self, watcher_state):
+        """Unknown result string from handle_login → logs but loop continues."""
+        write_signal(watcher_state["signal_file"])
+        with patch.object(watcher, 'read_mode', return_value='notify'), \
+             patch.object(watcher, 'POLL_SECONDS', 0), \
+             patch.object(watcher, 'COOLDOWN_SECONDS', 0), \
+             patch.object(watcher, '_run_notify_login', return_value="unknown_action"), \
+             patch('time.sleep', side_effect=_stop_after(2)):
+            watcher.main()  # should not raise
+        # Signal file should still exist (no action taken)
+        assert watcher_state["signal_file"].exists()
+        # Lock should be released
+        assert not watcher_state["lock_dir"].exists()
+
+    def test_snooze_bad_seconds_uses_default(self, watcher_state):
+        """Snooze with non-integer seconds falls back to 900s."""
+        write_signal(watcher_state["signal_file"])
+        with patch.object(watcher, 'read_mode', return_value='notify'), \
+             patch.object(watcher, 'POLL_SECONDS', 0), \
+             patch.object(watcher, 'COOLDOWN_SECONDS', 0), \
+             patch.object(watcher, '_run_notify_login', return_value="snooze:abc"), \
+             patch('time.sleep', side_effect=_stop_after(2)):
+            watcher.main()  # should not crash
+        data = json.loads(watcher_state["signal_file"].read_text())
+        # 900s default fallback
+        assert data["nextAttemptAfter"] > time.time() + 800
+        assert data["nextAttemptAfter"] <= time.time() + 901
+
+    def test_exception_in_handle_login_continues_loop(self, watcher_state):
+        """RuntimeError during handle_login → caught by generic handler, loop continues."""
+        write_signal(watcher_state["signal_file"])
+        call_count = 0
+
+        def flaky_login(profile):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise RuntimeError("transient error")
+            return "dismiss"
+
+        with patch.object(watcher, 'read_mode', return_value='notify'), \
+             patch.object(watcher, 'POLL_SECONDS', 0), \
+             patch.object(watcher, 'COOLDOWN_SECONDS', 0), \
+             patch.object(watcher, '_run_notify_login', side_effect=flaky_login), \
+             patch('time.sleep', side_effect=_stop_after(3)):
+            watcher.main()  # should not crash
+        # Lock released even after exception
+        assert not watcher_state["lock_dir"].exists()
+
+    def test_signal_deleted_between_trigger_and_load(self, watcher_state):
+        """Signal file deleted after should_trigger_login but before load_signal."""
+        write_signal(watcher_state["signal_file"])
+        original_load = watcher.load_signal
+
+        def load_then_delete():
+            # Delete the signal file, simulating a race
+            watcher_state["signal_file"].unlink(missing_ok=True)
+            return original_load()
+
+        with patch.object(watcher, 'read_mode', return_value='notify'), \
+             patch.object(watcher, 'POLL_SECONDS', 0), \
+             patch.object(watcher, 'COOLDOWN_SECONDS', 0), \
+             patch.object(watcher, 'PROFILE', 'fallback-prof'), \
+             patch.object(watcher, 'load_signal', side_effect=load_then_delete), \
+             patch.object(watcher, '_run_notify_login', return_value="success") as mock_notify, \
+             patch('time.sleep', side_effect=_stop_after(2)):
+            watcher.main()
+        # Profile should fall back to env var PROFILE
+        mock_notify.assert_called_with("fallback-prof")
 
 
 # ---------------------------------------------------------------------------
@@ -1886,6 +2012,234 @@ class TestRunNotifyLogin:
             result = watcher._run_notify_login("prof")
             assert result == "failed"
             mock_aws.kill.assert_called()
+
+    def test_webview_timeout_signal_returns_dismiss(self):
+        """SSO_TIMEOUT signal from webview → dismiss."""
+        mock_webview = MagicMock()
+        mock_webview.stdout = iter(["SSO_TIMEOUT\n"])
+        mock_webview.poll.return_value = 3
+        mock_webview.stdin = MagicMock()
+        with patch.object(watcher, '_launch_notify_webview', return_value=mock_webview), \
+             patch.object(watcher, '_kill_webview'):
+            assert watcher._run_notify_login("prof") == "dismiss"
+
+    def test_webview_error_signal_returns_dismiss(self):
+        """SSO_ERROR:detail signal → dismiss (tests startswith fix)."""
+        mock_webview = MagicMock()
+        mock_webview.stdout = iter(["SSO_ERROR:network failure\n"])
+        mock_webview.poll.return_value = 1
+        mock_webview.stdin = MagicMock()
+        with patch.object(watcher, '_launch_notify_webview', return_value=mock_webview), \
+             patch.object(watcher, '_kill_webview'):
+            assert watcher._run_notify_login("prof") == "dismiss"
+
+    def test_webview_unknown_action_returns_dismiss(self):
+        """SSO_ACTION:unknown → dismiss (not refresh/snooze/suppress)."""
+        mock_webview = MagicMock()
+        mock_webview.stdout = iter(["SSO_ACTION:unknown_action\n"])
+        mock_webview.poll.return_value = 0
+        mock_webview.stdin = MagicMock()
+        with patch.object(watcher, '_launch_notify_webview', return_value=mock_webview), \
+             patch.object(watcher, '_kill_webview'):
+            assert watcher._run_notify_login("prof") == "dismiss"
+
+    def test_webview_skips_non_signal_lines(self):
+        """Debug output lines before action line are skipped."""
+        mock_webview = MagicMock()
+        mock_webview.stdout = iter([
+            "DEBUG: loading webview\n",
+            "INFO: ready\n",
+            "SSO_ACTION:suppress\n",
+        ])
+        mock_webview.poll.return_value = 0
+        mock_webview.stdin = MagicMock()
+        with patch.object(watcher, '_launch_notify_webview', return_value=mock_webview), \
+             patch.object(watcher, '_kill_webview'):
+            assert watcher._run_notify_login("prof") == "suppress"
+
+    def test_auth_timeout_during_poll_returns_failed(self):
+        """SSO_LOGIN_TIMEOUT reached while polling aws process → failed."""
+        mock_webview = MagicMock()
+        mock_webview.stdout = iter(["SSO_ACTION:refresh\n"])
+        mock_webview.stdin = MagicMock()
+        mock_webview.poll.return_value = None  # webview stays alive
+
+        mock_aws = MagicMock()
+        mock_aws.poll.return_value = None  # never finishes
+        url = "https://device.sso.us-east-1.amazonaws.com/?user_code=ABCD&redirect_uri=http://127.0.0.1:2456"
+
+        with patch.object(watcher, '_launch_notify_webview', return_value=mock_webview), \
+             patch.object(watcher.subprocess, 'Popen', return_value=mock_aws), \
+             patch.object(watcher, '_extract_authorize_url', return_value=url), \
+             patch.object(watcher, '_extract_callback_host', return_value="127.0.0.1:2456"), \
+             patch.object(watcher, '_check_credentials_valid', return_value=False), \
+             patch.object(watcher, '_kill_webview'), \
+             patch('time.time') as mock_time, \
+             patch('time.sleep'):
+            # First call: deadline = 1000 + SSO_LOGIN_TIMEOUT
+            # Subsequent calls: past the deadline
+            mock_time.side_effect = [1000, 1000 + watcher.SSO_LOGIN_TIMEOUT + 1,
+                                     1000 + watcher.SSO_LOGIN_TIMEOUT + 2]
+            result = watcher._run_notify_login("prof")
+            assert result == "failed"
+            mock_aws.kill.assert_called()
+
+    def test_credential_check_during_poll_returns_success(self):
+        """_check_credentials_valid finds valid creds during poll → success."""
+        mock_webview = MagicMock()
+        mock_webview.stdout = iter(["SSO_ACTION:refresh\n"])
+        mock_webview.stdin = MagicMock()
+        mock_webview.poll.return_value = None
+
+        mock_aws = MagicMock()
+        mock_aws.poll.return_value = None  # aws hangs
+        url = "https://device.sso.us-east-1.amazonaws.com/?user_code=ABCD&redirect_uri=http://127.0.0.1:2456"
+
+        call_count = [0]
+
+        def fake_time():
+            call_count[0] += 1
+            # Return values that keep us within deadline but trigger cred check
+            return 1000 + call_count[0]
+
+        with patch.object(watcher, '_launch_notify_webview', return_value=mock_webview), \
+             patch.object(watcher.subprocess, 'Popen', return_value=mock_aws), \
+             patch.object(watcher, '_extract_authorize_url', return_value=url), \
+             patch.object(watcher, '_extract_callback_host', return_value="127.0.0.1:2456"), \
+             patch.object(watcher, '_check_credentials_valid', return_value=True), \
+             patch.object(watcher, '_kill_webview'), \
+             patch('time.time', side_effect=fake_time), \
+             patch('time.sleep'):
+            result = watcher._run_notify_login("prof")
+            assert result == "success"
+            mock_aws.kill.assert_called()
+
+    def test_webview_exits_during_auth_aws_finishes(self):
+        """Webview exits during auth, aws finishes within grace period → success."""
+        mock_webview = MagicMock()
+        mock_webview.stdout = iter(["SSO_ACTION:refresh\n"])
+        mock_webview.stdin = MagicMock()
+
+        mock_aws = MagicMock()
+        mock_aws.returncode = 0
+        mock_aws.stdout = MagicMock()
+        mock_aws.stdout.read.return_value = ""
+        url = "https://device.sso.us-east-1.amazonaws.com/?user_code=ABCD&redirect_uri=http://127.0.0.1:2456"
+
+        # First poll: aws not done yet (return None). Second: webview exited.
+        poll_calls = [0]
+        def aws_poll():
+            poll_calls[0] += 1
+            if poll_calls[0] <= 1:
+                return None
+            return 0
+
+        def webview_poll():
+            if poll_calls[0] >= 1:
+                return 0  # webview exits after first aws poll
+            return None
+
+        mock_aws.poll.side_effect = aws_poll
+        mock_aws.wait.return_value = 0
+        mock_webview.poll.side_effect = webview_poll
+
+        with patch.object(watcher, '_launch_notify_webview', return_value=mock_webview), \
+             patch.object(watcher.subprocess, 'Popen', return_value=mock_aws), \
+             patch.object(watcher, '_extract_authorize_url', return_value=url), \
+             patch.object(watcher, '_extract_callback_host', return_value="127.0.0.1:2456"), \
+             patch.object(watcher, '_kill_webview'), \
+             patch('time.time', return_value=1000), \
+             patch('time.sleep'):
+            result = watcher._run_notify_login("prof")
+            assert result == "success"
+
+    def test_webview_exits_during_auth_aws_hangs(self):
+        """Webview exits during auth, aws doesn't finish in 10s → dismiss."""
+        mock_webview = MagicMock()
+        mock_webview.stdout = iter(["SSO_ACTION:refresh\n"])
+        mock_webview.stdin = MagicMock()
+
+        mock_aws = MagicMock()
+        mock_aws.stdout = MagicMock()
+        mock_aws.stdout.read.return_value = ""
+        url = "https://device.sso.us-east-1.amazonaws.com/?user_code=ABCD&redirect_uri=http://127.0.0.1:2456"
+
+        # aws poll always None, webview exits after first loop iteration
+        mock_aws.poll.return_value = None
+        mock_aws.wait.side_effect = subprocess.TimeoutExpired("aws", 10)
+        # poll calls: loop check(None), webview check(0=exited), finally check(0)
+        mock_webview.poll.side_effect = [None, 0, 0]
+
+        with patch.object(watcher, '_launch_notify_webview', return_value=mock_webview), \
+             patch.object(watcher.subprocess, 'Popen', return_value=mock_aws), \
+             patch.object(watcher, '_extract_authorize_url', return_value=url), \
+             patch.object(watcher, '_extract_callback_host', return_value="127.0.0.1:2456"), \
+             patch.object(watcher, '_kill_webview'), \
+             patch('time.time', return_value=1000), \
+             patch('time.sleep'):
+            result = watcher._run_notify_login("prof")
+            assert result == "dismiss"
+            mock_aws.kill.assert_called()
+
+    def test_cleanup_when_aws_proc_is_none(self):
+        """Exception before aws_proc assigned → finally block safe."""
+        mock_webview = MagicMock()
+        mock_webview.stdout = iter(["SSO_ACTION:refresh\n"])
+        mock_webview.stdin = MagicMock()
+        mock_webview.poll.return_value = None
+
+        with patch.object(watcher, '_launch_notify_webview', return_value=mock_webview), \
+             patch.object(watcher.subprocess, 'Popen', side_effect=OSError("exec failed")), \
+             patch.object(watcher, '_kill_webview') as mock_kill:
+            with pytest.raises(OSError):
+                watcher._run_notify_login("prof")
+            mock_kill.assert_called()
+
+    def test_cleanup_closes_stdout_and_calls_cleanup(self):
+        """Finally block closes stdout and calls webview.cleanup()."""
+        mock_webview = MagicMock()
+        mock_stdout = MagicMock()
+        mock_stdout.__iter__ = MagicMock(return_value=iter(["SSO_WINDOW_CLOSED\n"]))
+        mock_webview.stdout = mock_stdout
+        mock_webview.poll.return_value = 2
+        mock_webview.stdin = MagicMock()
+        mock_webview.cleanup = MagicMock()
+
+        with patch.object(watcher, '_launch_notify_webview', return_value=mock_webview), \
+             patch.object(watcher, '_kill_webview'):
+            watcher._run_notify_login("prof")
+            mock_stdout.close.assert_called()
+            mock_webview.cleanup.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _is_webview_running
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestIsWebviewRunning:
+
+    def test_returns_true_when_running(self):
+        """pgrep rc=0 → webview is running."""
+        proc = _mock_proc("", 0)
+        with patch.object(watcher.subprocess, 'run', return_value=proc):
+            assert watcher._is_webview_running() is True
+
+    def test_returns_false_when_not_running(self):
+        """pgrep rc=1 → webview not running."""
+        proc = _mock_proc("", 1)
+        with patch.object(watcher.subprocess, 'run', return_value=proc):
+            assert watcher._is_webview_running() is False
+
+    def test_returns_false_on_timeout(self):
+        """subprocess.TimeoutExpired → False."""
+        with patch.object(watcher.subprocess, 'run', side_effect=subprocess.TimeoutExpired("pgrep", 3)):
+            assert watcher._is_webview_running() is False
+
+    def test_returns_false_on_exception(self):
+        """Generic exception → False."""
+        with patch.object(watcher.subprocess, 'run', side_effect=OSError("no pgrep")):
+            assert watcher._is_webview_running() is False
 
 
 # ---------------------------------------------------------------------------

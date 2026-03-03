@@ -766,6 +766,8 @@ def clear_signal() -> None:
         SIGNAL_FILE.unlink()
     except FileNotFoundError:
         pass
+    except Exception as e:
+        print(f"[sso-watcher] failed to clear signal: {e}", flush=True)
 
 
 def update_signal_snooze(seconds: int) -> None:
@@ -919,7 +921,7 @@ def _run_notify_login(profile: str) -> str:
             if stripped.startswith("SSO_ACTION:"):
                 action_line = stripped
                 break
-            elif stripped in ("SSO_WINDOW_CLOSED", "SSO_TIMEOUT", "SSO_ERROR"):
+            elif stripped in ("SSO_WINDOW_CLOSED", "SSO_TIMEOUT") or stripped.startswith("SSO_ERROR"):
                 print(f"[sso-watcher] webview: {stripped}", flush=True)
                 return "dismiss"
 
@@ -1158,7 +1160,11 @@ def main() -> int:
                         clear_signal()
                         print("[sso-watcher] login successful, signal cleared", flush=True)
                     elif result.startswith("snooze:"):
-                        seconds = int(result.split(":")[1])
+                        try:
+                            seconds = int(result.split(":")[1])
+                        except (ValueError, IndexError):
+                            print(f"[sso-watcher] bad snooze value: {result}, using 900s", flush=True)
+                            seconds = 900
                         update_signal_snooze(seconds)
                         print(f"[sso-watcher] snoozed, next attempt in {seconds}s", flush=True)
                     elif result == "suppress":

@@ -24,7 +24,7 @@ tests/
 
 ## Test Coverage
 
-**196 passing tests** (19 s3proxy + 177 watcher)
+**222 passing tests** (19 s3proxy + 203 watcher)
 
 ### S3 Proxy Tests (`tests/unit/test_s3proxy.py`)
 
@@ -148,10 +148,17 @@ tests/
 **Notify Webview Launch — `TestLaunchNotifyWebview`** (3 tests):
 - Binary missing returns None, mkdtemp failure, Popen failure cleanup
 
-**Notify Login Flow — `TestRunNotifyLogin`** (13 tests):
+**Notify Login Flow — `TestRunNotifyLogin`** (23 tests):
 - Fallback to dialog when webview missing (refresh/fail/snooze/suppress/dismiss)
 - Webview actions: snooze, suppress, dismiss, window closed, no output
 - Webview refresh: URL extracted and sent, no URL returns failed, stdin write fails
+- Webview signals: SSO_TIMEOUT, SSO_ERROR:detail, unknown action, non-signal debug lines
+- Auth polling: timeout returns failed, credential check returns success
+- Webview exits during auth: aws finishes (success), aws hangs (dismiss)
+- Cleanup: aws_proc is None, finally closes stdout and calls cleanup
+
+**Webview Running Check — `TestIsWebviewRunning`** (4 tests):
+- pgrep returns running/not running, timeout handling, generic exception
 
 **Stale Lock Recovery — `TestStaleLockRecovery`** (3 tests):
 - Stale lock reclaimed, non-stale not reclaimed, rmdir failure on stale lock
