@@ -1,23 +1,34 @@
 // SSO Login Webview — sandboxed browser for AWS SSO authentication.
 //
-// Opens an OAuth authorization URL in a dedicated WKWebView window with
-// persistent cookie storage (Google/IdP credentials cached across launches).
-// Detects the OAuth callback redirect and signals the parent process via
-// stdout, then exits cleanly.
+// Two modes:
+//   Direct:  sso-webview <authorize-url> <callback-host:port>
+//            Opens the auth URL immediately in a WKWebView.
 //
-// Usage: SSOLogin.app/Contents/MacOS/sso-webview <authorize-url> <callback-host:port>
+//   Notify:  sso-webview --notify <profile> <callback-host:port>
+//            Shows a notification page (Refresh/Snooze/Don't Remind).
+//            On Refresh: signals SSO_ACTION:refresh, shows spinner,
+//            reads authorize URL from stdin, navigates to it.
+//
+// Persistent cookie storage (Google/IdP credentials cached across launches).
+// Detects OAuth callback redirect and signals parent via stdout.
 //
 // Stdout signals (one per line, parent reads these):
 //   SSO_CALLBACK_DETECTED  — OAuth callback received, login succeeded
 //   SSO_WINDOW_CLOSED      — user closed the window before completing auth
 //   SSO_TIMEOUT            — window timeout reached without callback
 //   SSO_ERROR:<detail>     — startup or runtime error
+//   SSO_ACTION:refresh     — user clicked Refresh (notify mode)
+//   SSO_ACTION:snooze:<N>  — user chose snooze for N seconds
+//   SSO_ACTION:suppress    — user chose Don't Remind
+//   SSO_ACTION:dismiss     — user dismissed (closed window / timeout)
 //
 // Exit codes:
 //   0  callback detected (success)
 //   1  error (bad args, missing content view, etc.)
 //   2  user closed window
 //   3  timeout
+//   4  snooze
+//   5  suppress
 
 import Cocoa
 import WebKit
@@ -30,11 +41,15 @@ private enum Layout {
     static let minWidth: CGFloat = 480
     static let minHeight: CGFloat = 400
     static let progressBarHeight: CGFloat = 3
+    static let notifyWindowWidth: CGFloat = 480
+    static let notifyWindowHeight: CGFloat = 340
 }
 
 private enum Timing {
     static let postCallbackDelay: TimeInterval = 1.5
     static let windowTimeout: TimeInterval = 300
+    static let notifyTimeout: TimeInterval = 120
+    static let stdinTimeout: TimeInterval = 45
 }
 
 private enum ExitCode: Int32 {
@@ -42,18 +57,20 @@ private enum ExitCode: Int32 {
     case error = 1
     case userClosed = 2
     case timeout = 3
+    case snooze = 4
+    case suppress = 5
 }
+
+private let snoozeOptions: [(label: String, seconds: Int)] = [
+    ("15 min", 900),
+    ("30 min", 1800),
+    ("1 hour", 3600),
+    ("4 hours", 14400),
+]
 
 // MARK: - Navigation Delegate
 
 /// Monitors webview navigation to detect the OAuth callback redirect.
-///
-/// Detection: navigation to callback host:port (127.0.0.1:PORT or localhost:PORT).
-/// The aws CLI starts a local HTTP server on that port. When the IdP redirects
-/// there after auth, the callback is detected and the webview auto-closes.
-///
-/// Also detects connection-refused to the callback host (aws CLI already
-/// received the callback and shut down its server before webview navigated).
 final class SSONavigationDelegate: NSObject, WKNavigationDelegate {
     private let callbackPattern: String
     private let onCallbackDetected: () -> Void
@@ -90,7 +107,6 @@ final class SSONavigationDelegate: NSObject, WKNavigationDelegate {
         decidePolicyFor navigationResponse: WKNavigationResponse,
         decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void
     ) {
-        // Prevent downloads (e.g. callback response with Content-Disposition)
         if !navigationResponse.canShowMIMEType {
             decisionHandler(.cancel)
             return
@@ -105,8 +121,6 @@ final class SSONavigationDelegate: NSObject, WKNavigationDelegate {
     ) {
         let nsError = error as NSError
 
-        // Connection refused to callback host = aws CLI already got the callback
-        // and shut down its local server. Treat as success.
         if !callbackFired && nsError.code == NSURLErrorCannotConnectToHost {
             if let url = failingURL(from: error), matchesCallback(url) {
                 callbackFired = true
@@ -129,8 +143,6 @@ final class SSONavigationDelegate: NSObject, WKNavigationDelegate {
         webView.loadHTMLString(html, baseURL: nil)
     }
 
-    /// Match callback by host:port (e.g. "127.0.0.1:60137").
-    /// Also matches localhost variants.
     private func matchesCallback(_ url: URL) -> Bool {
         let host = url.host ?? ""
         let hostPort: String
@@ -140,14 +152,12 @@ final class SSONavigationDelegate: NSObject, WKNavigationDelegate {
             hostPort = host
         }
         if hostPort == callbackPattern { return true }
-        // Also match localhost<->127.0.0.1 substitution
         let alt = callbackPattern.replacingOccurrences(of: "127.0.0.1", with: "localhost")
         if hostPort == alt { return true }
         let alt2 = callbackPattern.replacingOccurrences(of: "localhost", with: "127.0.0.1")
         return hostPort == alt2
     }
 
-    /// Extract the failing URL from an error's userInfo.
     private func failingURL(from error: Error) -> URL? {
         (error as NSError).userInfo[NSURLErrorFailingURLErrorKey] as? URL
     }
@@ -161,32 +171,202 @@ final class SSONavigationDelegate: NSObject, WKNavigationDelegate {
     }
 }
 
+// MARK: - Notification View (native macOS)
+
+/// Native notification view shown in --notify mode before auth.
+final class NotificationView: NSView {
+    var onRefresh: (() -> Void)?
+    var onSnooze: ((Int) -> Void)?
+    var onSuppress: (() -> Void)?
+
+    private var spinner: NSProgressIndicator?
+    private var statusLabel: NSTextField?
+    private var buttonStack: NSStackView?
+
+    init(profile: String) {
+        super.init(frame: .zero)
+        setupUI(profile: profile)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    private func setupUI(profile: String) {
+        // Icon
+        let icon = NSImageView()
+        icon.image = NSImage(systemSymbolName: "lock.trianglebadge.exclamationmark",
+                             accessibilityDescription: "credentials expired")
+            ?? NSImage(named: NSImage.cautionName)
+        icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 36, weight: .light)
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        icon.setContentHuggingPriority(.required, for: .vertical)
+
+        // Title
+        let title = NSTextField(labelWithString: "AWS SSO Credentials Expired")
+        title.font = .systemFont(ofSize: 17, weight: .semibold)
+        title.alignment = .center
+        title.translatesAutoresizingMaskIntoConstraints = false
+
+        // Subtitle
+        let subtitle = NSTextField(labelWithString: "Profile: \(profile)")
+        subtitle.font = .systemFont(ofSize: 13)
+        subtitle.textColor = .secondaryLabelColor
+        subtitle.alignment = .center
+        subtitle.translatesAutoresizingMaskIntoConstraints = false
+
+        // Buttons
+        let refreshBtn = NSButton(title: "Refresh", target: self, action: #selector(refreshClicked))
+        refreshBtn.bezelStyle = .rounded
+        refreshBtn.keyEquivalent = "\r"
+        refreshBtn.controlSize = .large
+
+        let snoozeBtn = NSButton(title: "Snooze", target: self, action: #selector(snoozeClicked))
+        snoozeBtn.bezelStyle = .rounded
+        snoozeBtn.controlSize = .large
+
+        let suppressBtn = NSButton(title: "Don't Remind", target: self, action: #selector(suppressClicked))
+        suppressBtn.bezelStyle = .rounded
+        suppressBtn.controlSize = .small
+        suppressBtn.font = .systemFont(ofSize: 11)
+
+        let mainButtons = NSStackView(views: [refreshBtn, snoozeBtn])
+        mainButtons.spacing = 12
+        mainButtons.translatesAutoresizingMaskIntoConstraints = false
+
+        suppressBtn.translatesAutoresizingMaskIntoConstraints = false
+
+        // Spinner (hidden initially)
+        let spin = NSProgressIndicator()
+        spin.style = .spinning
+        spin.controlSize = .small
+        spin.isHidden = true
+        spin.translatesAutoresizingMaskIntoConstraints = false
+        self.spinner = spin
+
+        // Status label (hidden initially)
+        let status = NSTextField(labelWithString: "")
+        status.font = .systemFont(ofSize: 12)
+        status.textColor = .secondaryLabelColor
+        status.alignment = .center
+        status.isHidden = true
+        status.translatesAutoresizingMaskIntoConstraints = false
+        self.statusLabel = status
+
+        // Stack it all
+        let stack = NSStackView(views: [icon, title, subtitle, mainButtons, suppressBtn, spin, status])
+        stack.orientation = .vertical
+        stack.alignment = .centerX
+        stack.spacing = 12
+        stack.setCustomSpacing(4, after: title)
+        stack.setCustomSpacing(24, after: subtitle)
+        stack.setCustomSpacing(16, after: mainButtons)
+        stack.setCustomSpacing(8, after: spin)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        addSubview(stack)
+        self.buttonStack = mainButtons
+
+        NSLayoutConstraint.activate([
+            stack.centerXAnchor.constraint(equalTo: centerXAnchor),
+            stack.centerYAnchor.constraint(equalTo: centerYAnchor),
+            stack.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 30),
+            stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -30),
+        ])
+    }
+
+    func showConnecting() {
+        buttonStack?.isHidden = true
+        // Hide suppress button (it's a sibling in the parent stack)
+        if let stack = buttonStack?.superview as? NSStackView {
+            for view in stack.arrangedSubviews {
+                if let btn = view as? NSButton, btn.title == "Don't Remind" {
+                    btn.isHidden = true
+                }
+            }
+        }
+        spinner?.isHidden = false
+        spinner?.startAnimation(nil)
+        statusLabel?.stringValue = "Connecting to SSO..."
+        statusLabel?.isHidden = false
+    }
+
+    func showError(_ message: String) {
+        spinner?.stopAnimation(nil)
+        statusLabel?.stringValue = message
+        statusLabel?.textColor = .systemRed
+    }
+
+    @objc private func refreshClicked() {
+        onRefresh?()
+    }
+
+    @objc private func snoozeClicked() {
+        let menu = NSMenu()
+        for opt in snoozeOptions {
+            let item = NSMenuItem(title: opt.label, action: #selector(snoozeSelected(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = opt.seconds
+            menu.addItem(item)
+        }
+        if let event = NSApp.currentEvent {
+            NSMenu.popUpContextMenu(menu, with: event, for: self)
+        }
+    }
+
+    @objc private func snoozeSelected(_ sender: NSMenuItem) {
+        onSnooze?(sender.tag)
+    }
+
+    @objc private func suppressClicked() {
+        // Confirm
+        let alert = NSAlert()
+        alert.messageText = "Disable SSO Reminders?"
+        alert.informativeText = "Reminders will be disabled until a new signal is received.\n\nTo refresh later:\n  mise run sso-login"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Disable Reminders")
+        if alert.runModal() == .alertSecondButtonReturn {
+            onSuppress?()
+        }
+    }
+}
+
 // MARK: - App Delegate
 
 final class SSOAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var window: NSWindow?
     private var webView: WKWebView?
     private var progressBar: NSView?
+    private var notificationView: NotificationView?
     private var navigationDelegate: SSONavigationDelegate?
     private var timeoutTimer: Timer?
     private var progressObservation: NSKeyValueObservation?
     private var terminationReason: ExitCode = .userClosed
 
-    private let authorizeURL: URL
-    private let callbackHost: String
+    private let launchConfig: LaunchConfig
+    private var callbackHost: String
 
-    init(authorizeURL: URL, callbackHost: String) {
-        self.authorizeURL = authorizeURL
-        self.callbackHost = callbackHost
+    init(config: LaunchConfig) {
+        self.launchConfig = config
+        self.callbackHost = config.callbackHost
         super.init()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupMenu()
-        setupWindow()
-        setupWebView()
-        setupTimeout()
-        loadAuthorizeURL()
+
+        switch launchConfig.mode {
+        case .direct(let url):
+            setupWindow(size: .login)
+            setupWebView()
+            setupTimeout(Timing.windowTimeout)
+            navigateToAuth(url: url)
+        case .notify(let profile):
+            setupWindow(size: .notify)
+            showNotification(profile: profile)
+            setupTimeout(Timing.notifyTimeout)
+            NSSound.beep()
+            NSSound.beep()
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -208,14 +388,22 @@ final class SSOAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             signal("SSO_TIMEOUT")
         case .error:
             signal("SSO_ERROR:unexpected termination")
+        case .snooze, .suppress:
+            break  // already signaled
         }
     }
 
     // MARK: - NSWindowDelegate
 
     func windowWillClose(_ notification: Notification) {
-        // terminationReason is already .userClosed by default;
-        // if callback was detected, it was set to .success before we get here.
+        // terminationReason is already set by the action that triggered close
+    }
+
+    // MARK: - Window sizes
+
+    private enum WindowSize {
+        case login
+        case notify
     }
 
     // MARK: - Setup
@@ -231,7 +419,6 @@ final class SSOAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         appMenuItem.submenu = appMenu
         mainMenu.addItem(appMenuItem)
 
-        // Edit menu — required for Cmd+C/V/X/A in webview text fields
         let editMenuItem = NSMenuItem()
         let editMenu = NSMenu(title: "Edit")
         editMenu.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
@@ -247,9 +434,16 @@ final class SSOAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSApp.mainMenu = mainMenu
     }
 
-    private func setupWindow() {
+    private func setupWindow(size: WindowSize) {
+        let (w, h): (CGFloat, CGFloat) = {
+            switch size {
+            case .login:  return (Layout.windowWidth, Layout.windowHeight)
+            case .notify: return (Layout.notifyWindowWidth, Layout.notifyWindowHeight)
+            }
+        }()
+
         let win = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: Layout.windowWidth, height: Layout.windowHeight),
+            contentRect: NSRect(x: 0, y: 0, width: w, height: h),
             styleMask: [.titled, .closable, .resizable, .miniaturizable],
             backing: .buffered,
             defer: false
@@ -283,7 +477,6 @@ final class SSOAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let wv = WKWebView(frame: contentView.bounds, configuration: config)
         wv.autoresizingMask = [.width, .height]
 
-        // Progress bar — animates width from 0% to estimatedProgress
         let bar = NSView(frame: NSRect(
             x: 0,
             y: contentView.bounds.height - Layout.progressBarHeight,
@@ -301,7 +494,6 @@ final class SSOAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         )
         wv.navigationDelegate = navigationDelegate
 
-        // Modern KVO for progress tracking
         progressObservation = wv.observe(\.estimatedProgress, options: [.new]) { [weak bar, weak contentView] webView, _ in
             guard let bar = bar, let contentView = contentView else { return }
             DispatchQueue.main.async {
@@ -322,15 +514,112 @@ final class SSOAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         self.progressBar = bar
     }
 
-    private func setupTimeout() {
-        timeoutTimer = Timer.scheduledTimer(withTimeInterval: Timing.windowTimeout, repeats: false) { [weak self] _ in
+    private func setupTimeout(_ interval: TimeInterval) {
+        timeoutTimer?.invalidate()
+        timeoutTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { [weak self] _ in
             self?.terminationReason = .timeout
             NSApp.terminate(nil)
         }
     }
 
-    private func loadAuthorizeURL() {
-        webView?.load(URLRequest(url: authorizeURL))
+    // MARK: - Notification mode
+
+    private func showNotification(profile: String) {
+        guard let contentView = window?.contentView else { return }
+
+        let nv = NotificationView(profile: profile)
+        nv.frame = contentView.bounds
+        nv.autoresizingMask = [.width, .height]
+        nv.translatesAutoresizingMaskIntoConstraints = false
+
+        nv.onRefresh = { [weak self] in self?.handleRefresh() }
+        nv.onSnooze = { [weak self] seconds in self?.handleSnooze(seconds) }
+        nv.onSuppress = { [weak self] in self?.handleSuppress() }
+
+        contentView.addSubview(nv)
+        NSLayoutConstraint.activate([
+            nv.topAnchor.constraint(equalTo: contentView.topAnchor),
+            nv.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+            nv.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            nv.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+        ])
+        self.notificationView = nv
+    }
+
+    private func handleRefresh() {
+        signal("SSO_ACTION:refresh")
+        notificationView?.showConnecting()
+
+        // Cancel the notification timeout, we'll set a new one for the auth
+        timeoutTimer?.invalidate()
+        timeoutTimer = nil
+
+        // Read authorize URL from stdin on background thread
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+            let url = self.readURLFromStdin()
+            DispatchQueue.main.async {
+                if let url = url {
+                    self.transitionToAuth(url: url)
+                } else {
+                    self.notificationView?.showError("Failed to connect to SSO. Close and retry.")
+                    self.setupTimeout(30)
+                }
+            }
+        }
+    }
+
+    private func readURLFromStdin() -> URL? {
+        // Read one line from stdin with a timeout.
+        // The watcher writes the authorize URL after starting aws sso login.
+        let deadline = Date().addingTimeInterval(Timing.stdinTimeout)
+        while Date() < deadline {
+            if let line = readLine(strippingNewline: true), !line.isEmpty {
+                return URL(string: line)
+            }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        return nil
+    }
+
+    private func transitionToAuth(url: URL) {
+        // Resize window for login
+        if let win = window {
+            let newFrame = NSRect(
+                x: win.frame.midX - Layout.windowWidth / 2,
+                y: win.frame.midY - Layout.windowHeight / 2,
+                width: Layout.windowWidth,
+                height: Layout.windowHeight
+            )
+            win.setFrame(newFrame, display: true, animate: true)
+        }
+
+        // Remove notification view
+        notificationView?.removeFromSuperview()
+        notificationView = nil
+
+        // Setup webview and load
+        setupWebView()
+        setupTimeout(Timing.windowTimeout)
+        navigateToAuth(url: url)
+    }
+
+    private func handleSnooze(_ seconds: Int) {
+        signal("SSO_ACTION:snooze:\(seconds)")
+        terminationReason = .snooze
+        NSApp.terminate(nil)
+    }
+
+    private func handleSuppress() {
+        signal("SSO_ACTION:suppress")
+        terminationReason = .suppress
+        NSApp.terminate(nil)
+    }
+
+    // MARK: - Auth navigation
+
+    private func navigateToAuth(url: URL) {
+        webView?.load(URLRequest(url: url))
     }
 
     // MARK: - Callback handling
@@ -340,7 +629,6 @@ final class SSOAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         timeoutTimer = nil
         terminationReason = .success
 
-        // Brief delay so aws-cli's local HTTP server receives the redirect
         DispatchQueue.main.asyncAfter(deadline: .now() + Timing.postCallbackDelay) {
             NSApp.terminate(nil)
         }
@@ -354,14 +642,36 @@ final class SSOAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 }
 
-// MARK: - Entry point
+// MARK: - Launch configuration
 
-func parseArguments() -> (url: URL, callbackHost: String)? {
+enum LaunchMode {
+    case direct(URL)
+    case notify(profile: String)
+}
+
+struct LaunchConfig {
+    let mode: LaunchMode
+    let callbackHost: String
+}
+
+func parseArguments() -> LaunchConfig? {
     let args = CommandLine.arguments
+
+    // --notify <profile> <callback-host:port>
+    if args.count >= 2 && args[1] == "--notify" {
+        guard args.count >= 3 else {
+            fputs("Usage: sso-webview --notify <profile> [callback-host:port]\n", stderr)
+            return nil
+        }
+        let profile = args[2]
+        let callback = args.count >= 4 ? args[3] : "127.0.0.1"
+        return LaunchConfig(mode: .notify(profile: profile), callbackHost: callback)
+    }
+
+    // Direct: <authorize-url> [callback-host:port]
     guard args.count >= 2 else {
         fputs("Usage: sso-webview <authorize-url> [callback-host:port]\n", stderr)
-        fputs("  authorize-url    AWS SSO OIDC authorization URL\n", stderr)
-        fputs("  callback-host    OAuth callback host:port (default: 127.0.0.1)\n", stderr)
+        fputs("       sso-webview --notify <profile> [callback-host:port]\n", stderr)
         return nil
     }
 
@@ -371,8 +681,10 @@ func parseArguments() -> (url: URL, callbackHost: String)? {
     }
 
     let callbackHost = args.count >= 3 ? args[2] : "127.0.0.1"
-    return (url, callbackHost)
+    return LaunchConfig(mode: .direct(url), callbackHost: callbackHost)
 }
+
+// MARK: - Entry point
 
 guard let config = parseArguments() else {
     exit(ExitCode.error.rawValue)
@@ -381,6 +693,6 @@ guard let config = parseArguments() else {
 let app = NSApplication.shared
 app.setActivationPolicy(.regular)
 
-let delegate = SSOAppDelegate(authorizeURL: config.url, callbackHost: config.callbackHost)
+let delegate = SSOAppDelegate(config: config)
 app.delegate = delegate
 app.run()

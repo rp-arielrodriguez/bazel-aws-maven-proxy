@@ -13,7 +13,7 @@ SSO Watcher (launchd) detects signal
        ↓ tries silent token refresh first (all modes)
        ↓ success? done — no browser needed
        ↓ failed? fallback per mode:
-       ↓   notify: Refresh/Snooze/Don't Remind dialog
+       ↓   notify: all-in-one webview (notification → auth)
        ↓   auto: opens webview immediately
        ↓   silent: gives up (no webview/browser)
        ↓   standalone: idle (manual only)
@@ -43,7 +43,7 @@ Host daemon (launchd user agent) that:
 - All modes except `standalone` try **silent token refresh** first using cached refresh token
 - If silent refresh succeeds: credentials renewed without browser, signal cleared
 - If silent refresh fails, falls back per mode:
-  - `notify` (default): macOS dialog with Refresh/Snooze/Don't Remind
+  - `notify` (default): all-in-one webview with notification page (Refresh/Snooze/Don't Remind), transitions to auth on Refresh
   - `auto`: opens webview immediately for SSO login
   - `silent`: returns failure — no webview/browser fallback
   - `standalone`: watcher idles, manual `mise run sso-login` only

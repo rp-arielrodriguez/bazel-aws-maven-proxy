@@ -19,12 +19,12 @@ tests/
 │   └── sample_aws_config.ini
 └── unit/
     ├── test_s3proxy.py      # S3 proxy tests (19 tests)
-    └── test_watcher.py      # SSO watcher tests (156 tests)
+    └── test_watcher.py      # SSO watcher tests (177 tests)
 ```
 
 ## Test Coverage
 
-**175 passing tests** (19 s3proxy + 156 watcher)
+**196 passing tests** (19 s3proxy + 177 watcher)
 
 ### S3 Proxy Tests (`tests/unit/test_s3proxy.py`)
 
@@ -141,6 +141,17 @@ tests/
 
 **AWS CLI Check — `TestCheckAwsCli`** (5 tests):
 - Valid version, low version warning, missing binary, generic exception, exact minimum
+
+**Credential Check — `TestCheckCredentialsValid`** (5 tests):
+- Returns true/false on success/failure, exception handling, timeout, profile passed to command
+
+**Notify Webview Launch — `TestLaunchNotifyWebview`** (3 tests):
+- Binary missing returns None, mkdtemp failure, Popen failure cleanup
+
+**Notify Login Flow — `TestRunNotifyLogin`** (13 tests):
+- Fallback to dialog when webview missing (refresh/fail/snooze/suppress/dismiss)
+- Webview actions: snooze, suppress, dismiss, window closed, no output
+- Webview refresh: URL extracted and sent, no URL returns failed, stdin write fails
 
 **Stale Lock Recovery — `TestStaleLockRecovery`** (3 tests):
 - Stale lock reclaimed, non-stale not reclaimed, rmdir failure on stale lock

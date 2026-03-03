@@ -32,8 +32,11 @@ import configparser
 import glob
 import json
 import os
+import stat
 import subprocess
 import sys
+import tempfile
+import threading
 import time
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
@@ -776,6 +779,258 @@ def update_signal_snooze(seconds: int) -> None:
         print(f"[sso-watcher] failed to write snooze: {e}", flush=True)
 
 
+class _WebviewHandle:
+    """Wrapper providing stdin/stdout-like interface over named pipes.
+
+    macOS requires `open -a` to properly activate GUI apps from background
+    processes (launchd). Since `open` doesn't support pipe redirection to
+    the child process, we use named FIFOs for bidirectional communication.
+    The webview reads from the stdin FIFO and writes to the stdout FIFO.
+    """
+
+    def __init__(self, stdout_file, stdin_file, fifo_dir: str,
+                 open_proc: subprocess.Popen, app_name: str):
+        self.stdout = stdout_file    # reads lines from webview
+        self.stdin = stdin_file      # writes to webview
+        self._fifo_dir = fifo_dir
+        self._open_proc = open_proc  # `open -W` process
+        self._app_name = app_name
+
+    def poll(self):
+        """Check if webview is still running."""
+        return self._open_proc.poll()
+
+    def cleanup(self):
+        """Remove FIFOs."""
+        import shutil
+        try:
+            shutil.rmtree(self._fifo_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+
+def _launch_notify_webview(profile: str, callback_host: str) -> _WebviewHandle | None:
+    """Launch webview in --notify mode (notification page + auth in one window).
+
+    Uses `open -a` with named FIFOs for stdin/stdout communication so macOS
+    properly activates the GUI window from background processes (launchd).
+
+    The webview shows a notification page with Refresh/Snooze/Don't Remind.
+    On Refresh, it signals SSO_ACTION:refresh and waits for an authorize URL
+    on stdin, then navigates to it.
+
+    Returns _WebviewHandle with stdin/stdout, or None if webview unavailable.
+    """
+    app_bundle = WEBVIEW_APP.parent.parent.parent  # .../SSOLogin.app
+    if not WEBVIEW_APP.exists():
+        print("[sso-watcher] webview not found, falling back to dialog", flush=True)
+        return None
+
+    fifo_dir = None
+    try:
+        # Create named pipes for communication
+        fifo_dir = tempfile.mkdtemp(prefix="sso-webview-")
+        stdin_fifo = os.path.join(fifo_dir, "stdin")
+        stdout_fifo = os.path.join(fifo_dir, "stdout")
+        os.mkfifo(stdin_fifo)
+        os.mkfifo(stdout_fifo)
+
+        # Launch via `open -a` for proper GUI activation
+        # -n = new instance, -W = wait for exit
+        open_proc = subprocess.Popen(
+            ["open", "-a", str(app_bundle), "-n", "-W",
+             "--stdin", stdin_fifo,
+             "--stdout", stdout_fifo,
+             "--args", "--notify", profile, callback_host],
+            stderr=subprocess.DEVNULL,
+        )
+
+        # Open FIFOs — stdout first (read end), then stdin (write end)
+        # Opening a FIFO blocks until the other end opens too, so we open
+        # stdout (our read) in a thread to avoid deadlock with stdin (our write).
+        stdout_file = [None]
+        stdout_err = [None]
+
+        def open_stdout():
+            try:
+                stdout_file[0] = open(stdout_fifo, "r")
+            except Exception as e:
+                stdout_err[0] = e
+
+        t = threading.Thread(target=open_stdout, daemon=True)
+        t.start()
+
+        stdin_file = open(stdin_fifo, "w")
+        t.join(timeout=10)
+
+        if stdout_file[0] is None:
+            raise RuntimeError(f"Failed to open stdout FIFO: {stdout_err[0]}")
+
+        return _WebviewHandle(
+            stdout_file=stdout_file[0],
+            stdin_file=stdin_file,
+            fifo_dir=fifo_dir,
+            open_proc=open_proc,
+            app_name="AWS SSO Login",
+        )
+    except Exception as e:
+        print(f"[sso-watcher] webview notify launch failed: {e}", flush=True)
+        if fifo_dir:
+            import shutil
+            shutil.rmtree(fifo_dir, ignore_errors=True)
+        return None
+
+
+def _run_notify_login(profile: str) -> str:
+    """Handle login via all-in-one webview (notify mode).
+
+    Launches webview in --notify mode. Reads user action from stdout.
+    If user clicks Refresh, starts aws sso login --no-browser, extracts
+    the authorize URL, sends it to webview via stdin, then waits for
+    the auth to complete.
+
+    Returns action result string (same as handle_login).
+    """
+    # We don't know the callback host yet — use a placeholder; the webview
+    # will get the real one when we send the authorize URL. For --notify mode
+    # the callback host is set when we start aws sso login.
+    webview = _launch_notify_webview(profile, "127.0.0.1")
+    if webview is None:
+        # Fallback to AppleScript dialog + separate webview
+        print(f"[sso-watcher] showing notification dialog for {profile}", flush=True)
+        action = show_notification(profile)
+        print(f"[sso-watcher] dialog result: {action}", flush=True)
+        if action == "refresh":
+            rc = run_aws_sso_login(profile)
+            return "success" if rc == 0 else "failed"
+        elif action.startswith("snooze:"):
+            return action
+        elif action == "suppress":
+            return "suppress"
+        return "dismiss"
+
+    aws_proc = None
+    try:
+        # Wait for user action from webview stdout
+        print(f"[sso-watcher] notify webview launched for {profile}", flush=True)
+        action_line = None
+        for line in webview.stdout:
+            stripped = line.strip()
+            if stripped.startswith("SSO_ACTION:"):
+                action_line = stripped
+                break
+            elif stripped in ("SSO_WINDOW_CLOSED", "SSO_TIMEOUT", "SSO_ERROR"):
+                print(f"[sso-watcher] webview: {stripped}", flush=True)
+                return "dismiss"
+
+        if not action_line:
+            print("[sso-watcher] webview closed without action", flush=True)
+            return "dismiss"
+
+        action = action_line[len("SSO_ACTION:"):]
+        print(f"[sso-watcher] webview action: {action}", flush=True)
+
+        if action.startswith("snooze:"):
+            seconds = action[len("snooze:"):]
+            return f"snooze:{seconds}"
+        elif action == "suppress":
+            return "suppress"
+        elif action == "dismiss":
+            return "dismiss"
+        elif action != "refresh":
+            return "dismiss"
+
+        # User clicked Refresh — start aws sso login --no-browser
+        cmd = ["aws", "sso", "login", "--no-browser", "--profile", profile]
+        print(f"[sso-watcher] running: {' '.join(cmd)}", flush=True)
+
+        aws_proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+
+        # Extract authorize URL from aws output
+        url = _extract_authorize_url(aws_proc)
+        if not url:
+            print("[sso-watcher] failed to extract authorize URL", flush=True)
+            aws_proc.kill()
+            # Tell webview there's an error by closing its stdin
+            try:
+                webview.stdin.close()
+            except Exception:
+                pass
+            return "failed"
+
+        # Send URL to webview via stdin
+        callback_host = _extract_callback_host(url)
+        print(f"[sso-watcher] authorize URL obtained, sending to webview", flush=True)
+        try:
+            webview.stdin.write(url + "\n")
+            webview.stdin.flush()
+        except Exception as e:
+            print(f"[sso-watcher] failed to send URL to webview: {e}", flush=True)
+            aws_proc.kill()
+            return "failed"
+
+        # Now poll aws process for completion, same as run_aws_sso_login
+        deadline = time.time() + SSO_LOGIN_TIMEOUT
+        last_cred_check = 0
+        cred_check_interval = 15
+        while True:
+            rc = aws_proc.poll()
+            if rc is not None:
+                output = aws_proc.stdout.read() if aws_proc.stdout else ""
+                if output.strip():
+                    print(output.strip(), flush=True)
+                return "success" if rc == 0 else "failed"
+
+            # Check if webview exited (user closed window during auth)
+            if webview.poll() is not None:
+                print("[sso-watcher] webview closed during auth", flush=True)
+                try:
+                    aws_proc.wait(timeout=10)
+                    return "success" if aws_proc.returncode == 0 else "failed"
+                except subprocess.TimeoutExpired:
+                    aws_proc.kill()
+                    return "dismiss"
+
+            # Secondary exit: credentials became valid
+            now = time.time()
+            if now - last_cred_check >= cred_check_interval:
+                last_cred_check = now
+                if _check_credentials_valid(profile):
+                    print("[sso-watcher] credentials valid during wait, killing stale aws process", flush=True)
+                    aws_proc.kill()
+                    return "success"
+
+            if time.time() > deadline:
+                print(f"[sso-watcher] aws sso login timed out after {SSO_LOGIN_TIMEOUT}s", flush=True)
+                aws_proc.kill()
+                return "failed"
+
+            time.sleep(0.5)
+
+    finally:
+        # Clean up: kill webview and aws process if still running
+        if aws_proc and aws_proc.poll() is None:
+            aws_proc.kill()
+        if webview.poll() is None:
+            _kill_webview()
+        try:
+            webview.stdin.close()
+        except Exception:
+            pass
+        try:
+            webview.stdout.close()
+        except Exception:
+            pass
+        if hasattr(webview, 'cleanup'):
+            webview.cleanup()
+
+
 def handle_login(profile: str) -> str:
     """
     Handle the login flow based on configured mode.
@@ -785,9 +1040,9 @@ def handle_login(profile: str) -> str:
     interaction. Otherwise falls back to mode-specific behavior.
 
     Modes:
-    - notify: silent refresh → dialog → browser login
-    - auto: silent refresh → browser login (no dialog)
-    - silent: silent refresh only, no browser
+    - notify: silent refresh → webview notification → auth (all-in-one)
+    - auto: silent refresh → webview auth (no notification)
+    - silent: silent refresh only, no webview
     - standalone: should not reach here
 
     Args:
@@ -811,25 +1066,13 @@ def handle_login(profile: str) -> str:
     if try_silent_refresh(profile):
         return "success"
 
-    # Silent mode: no browser fallback
+    # Silent mode: no webview fallback
     if mode == "silent":
         print("[sso-watcher] silent refresh failed, no browser fallback in silent mode", flush=True)
         return "failed"
 
     if mode == "notify":
-        print(f"[sso-watcher] showing notification dialog for {profile}", flush=True)
-        action = show_notification(profile)
-        print(f"[sso-watcher] dialog result: {action}", flush=True)
-
-        if action == "refresh":
-            pass  # fall through to run_aws_sso_login below
-        elif action.startswith("snooze:"):
-            return action
-        elif action == "suppress":
-            return "suppress"
-        else:
-            print("[sso-watcher] login skipped by user", flush=True)
-            return "dismiss"
+        return _run_notify_login(profile)
 
     elif mode == "auto":
         pass  # fall through to run_aws_sso_login below
