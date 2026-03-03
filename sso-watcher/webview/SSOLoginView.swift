@@ -48,11 +48,12 @@ private enum ExitCode: Int32 {
 
 /// Monitors webview navigation to detect the OAuth callback redirect.
 ///
-/// Detection strategies (belt and suspenders):
-/// 1. Navigation to callback host:port (127.0.0.1:PORT from redirect_uri)
-/// 2. Navigation to localhost:PORT (some AWS CLI versions use localhost)
-/// 3. Landing on the SSO portal page (means auth completed, callback already fired)
-/// 4. Failed navigation to callback (connection refused = aws already received it)
+/// Detection: navigation to callback host:port (127.0.0.1:PORT or localhost:PORT).
+/// The aws CLI starts a local HTTP server on that port. When the IdP redirects
+/// there after auth, the callback is detected and the webview auto-closes.
+///
+/// Also detects connection-refused to the callback host (aws CLI already
+/// received the callback and shut down its server before webview navigated).
 final class SSONavigationDelegate: NSObject, WKNavigationDelegate {
     private let callbackPattern: String
     private let onCallbackDetected: () -> Void
@@ -99,20 +100,6 @@ final class SSONavigationDelegate: NSObject, WKNavigationDelegate {
 
     func webView(
         _ webView: WKWebView,
-        didFinish navigation: WKNavigation!
-    ) {
-        // Detect SSO portal page as success (auth completed, callback already handled)
-        guard !callbackFired, let url = webView.url else { return }
-        let urlStr = url.absoluteString
-        if urlStr.contains("/start#/") || urlStr.contains("/start/#") ||
-           urlStr.contains("awsapps.com/start") {
-            callbackFired = true
-            onCallbackDetected()
-        }
-    }
-
-    func webView(
-        _ webView: WKWebView,
         didFailProvisionalNavigation navigation: WKNavigation!,
         withError error: Error
     ) {
@@ -121,7 +108,7 @@ final class SSONavigationDelegate: NSObject, WKNavigationDelegate {
         // Connection refused to callback host = aws CLI already got the callback
         // and shut down its local server. Treat as success.
         if !callbackFired && nsError.code == NSURLErrorCannotConnectToHost {
-            if let url = navigationAction(from: error), matchesCallback(url) {
+            if let url = failingURL(from: error), matchesCallback(url) {
                 callbackFired = true
                 onCallbackDetected()
                 return
@@ -160,10 +147,9 @@ final class SSONavigationDelegate: NSObject, WKNavigationDelegate {
         return hostPort == alt2
     }
 
-    /// Try to extract the failing URL from an error's userInfo.
-    private func navigationAction(from error: Error) -> URL? {
-        let nsError = error as NSError
-        return nsError.userInfo[NSURLErrorFailingURLErrorKey] as? URL
+    /// Extract the failing URL from an error's userInfo.
+    private func failingURL(from error: Error) -> URL? {
+        (error as NSError).userInfo[NSURLErrorFailingURLErrorKey] as? URL
     }
 
     private func escapeHTML(_ string: String) -> String {
