@@ -54,6 +54,7 @@ stateDiagram-v2
 
     login --> polling : exit 0, clears signal + writes cooldown
     login --> polling : nonzero or timeout, writes 30s snooze
+    login --> polling : cred check valid during wait, kills aws, clears signal + writes cooldown
 ```
 
 ## Auto Mode Flow
@@ -69,6 +70,7 @@ stateDiagram-v2
     silent_refresh --> login : failed
     login --> polling : exit 0, clears signal + writes cooldown
     login --> polling : nonzero or timeout, writes 30s snooze
+    login --> polling : cred check valid during wait, kills aws, clears signal + writes cooldown
 ```
 
 ## Silent Mode Flow
@@ -186,8 +188,10 @@ handling (notify)    | silent fail > dialog > refresh > !0| write 30s snooze to 
 handling (notify)    | silent fail > dialog > snooze      | write snooze to signal        | polling
 handling (notify)    | silent fail > dialog > suppress    | clear signal, write cooldown  | polling
 handling (notify)    | silent fail > dialog > dismiss     | write cooldown                | polling
+handling (notify)    | silent fail > login > cred valid   | clear signal, write cooldown  | polling
 handling (auto)      | silent fail > login > exit 0       | clear signal, write cooldown  | polling
 handling (auto)      | silent fail > login > nonzero      | write 30s snooze to signal    | polling
+handling (auto)      | silent fail > login > cred valid   | clear signal, write cooldown  | polling
 handling (silent)    | silent fail                        | write 30s snooze to signal    | polling
 standalone           | any                                | sleep                         | standalone
 ```

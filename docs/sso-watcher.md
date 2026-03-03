@@ -208,7 +208,7 @@ if time.time() - last_login < COOLDOWN_SECONDS:
     return  # Skip, too soon
 ```
 
-Cooldown is written on dismiss only. On login failure/timeout, a 30s snooze is written to the signal file instead, allowing quick retry.
+Cooldown is written on any successful login, dismiss, or suppress (i.e., any completed interaction). On login failure/timeout, a 30s snooze is written to the signal file instead, allowing quick retry.
 
 ### State Management
 

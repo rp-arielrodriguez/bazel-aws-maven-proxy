@@ -32,6 +32,7 @@ import configparser
 import glob
 import json
 import os
+import queue
 import subprocess
 import sys
 import tempfile
@@ -56,9 +57,18 @@ STATE_DIR = Path(os.environ.get(
 LOCK_DIR = STATE_DIR / "login.lock"
 LAST_RUN_FILE = STATE_DIR / "last-login-at.txt"
 MODE_FILE = STATE_DIR / "mode"
-COOLDOWN_SECONDS = int(os.environ.get("SSO_COOLDOWN_SECONDS", "600"))  # 10 min
-POLL_SECONDS = int(os.environ.get("SSO_POLL_SECONDS", "5"))
-PROACTIVE_REFRESH_MINUTES = int(os.environ.get("SSO_PROACTIVE_REFRESH_MINUTES", "30"))
+try:
+    COOLDOWN_SECONDS = int(os.environ.get("SSO_COOLDOWN_SECONDS", "600"))
+except ValueError:
+    COOLDOWN_SECONDS = 600  # 10 min default
+try:
+    POLL_SECONDS = int(os.environ.get("SSO_POLL_SECONDS", "5"))
+except ValueError:
+    POLL_SECONDS = 5
+try:
+    PROACTIVE_REFRESH_MINUTES = int(os.environ.get("SSO_PROACTIVE_REFRESH_MINUTES", "30"))
+except ValueError:
+    PROACTIVE_REFRESH_MINUTES = 30
 
 # Login mode: state file > env var > default
 _ENV_MODE = os.environ.get("SSO_LOGIN_MODE", "notify")
@@ -115,6 +125,7 @@ def try_acquire_lock() -> bool:
         return True
     except FileExistsError:
         # Check for stale lock
+        age = -1.0
         try:
             age = time.time() - LOCK_DIR.stat().st_mtime
             if age > LOCK_STALE_SECONDS:
@@ -123,7 +134,7 @@ def try_acquire_lock() -> bool:
                 LOCK_DIR.mkdir(parents=True, exist_ok=False)
                 return True
         except Exception:
-            pass
+            print(f"[sso-watcher] stale lock detected, age={age:.0f}s", flush=True)
         return False
 
 
@@ -521,7 +532,10 @@ def show_notification(profile: str) -> str:
     return "dismiss"
 
 
-SSO_LOGIN_TIMEOUT = int(os.environ.get("SSO_LOGIN_TIMEOUT", "120"))  # seconds
+try:
+    SSO_LOGIN_TIMEOUT = int(os.environ.get("SSO_LOGIN_TIMEOUT", "120"))
+except ValueError:
+    SSO_LOGIN_TIMEOUT = 120  # seconds default
 
 # Webview .app bundle path (built by sso-install.sh)
 WEBVIEW_APP = STATE_DIR / "bin" / "SSOLogin.app" / "Contents" / "MacOS" / "sso-webview"
@@ -531,42 +545,42 @@ WEBVIEW_APP_BUNDLE = STATE_DIR / "bin" / "SSOLogin.app"
 def _extract_authorize_url(proc: subprocess.Popen, timeout: float = 30) -> str | None:
     """Read stdout from aws sso login --no-browser until we find the authorize URL.
 
-    Uses select() to avoid blocking indefinitely on readline. The OIDC
-    device registration can take 5-15s before the URL is printed.
-    Falls back to plain iteration if stdout has no fileno (e.g. tests).
+    Uses a daemon thread + queue to avoid blocking indefinitely on readline.
+    The OIDC device registration can take 5-15s before the URL is printed.
+    If no URL is found within *timeout* seconds, returns None.
     """
     if proc.stdout is None:
         return None
-    import select as _select
+
+    line_queue: queue.Queue[str | None] = queue.Queue()
+
+    def _reader():
+        try:
+            for line in proc.stdout:
+                line_queue.put(line)
+            line_queue.put(None)  # EOF sentinel
+        except Exception:
+            line_queue.put(None)
+
+    reader_thread = threading.Thread(target=_reader, daemon=True)
+    reader_thread.start()
 
     deadline = time.time() + timeout
-
-    # Use non-blocking select if available (real file descriptor)
-    fd = None
-    try:
-        fd = proc.stdout.fileno()
-    except Exception:
-        pass
-
-    for line in proc.stdout:
-        if not line:
+    while True:
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            break
+        try:
+            line = line_queue.get(timeout=min(remaining, 1.0))
+        except queue.Empty:
+            continue
+        if line is None:
             break
         stripped = line.strip()
         if stripped.startswith("https://"):
             return stripped
         if stripped:
             print(f"[sso-watcher] aws: {stripped}", flush=True)
-        if time.time() > deadline:
-            break
-
-        # Wait for next line with timeout (prevents indefinite blocking)
-        if fd is not None:
-            remaining = deadline - time.time()
-            if remaining <= 0:
-                break
-            ready, _, _ = _select.select([fd], [], [], min(remaining, 1.0))
-            if not ready:
-                continue  # timeout on select, check deadline in loop
 
     return None
 
@@ -773,12 +787,23 @@ def clear_signal() -> None:
 
 
 def update_signal_snooze(seconds: int) -> None:
-    """Write nextAttemptAfter into existing signal file for snooze."""
+    """Write nextAttemptAfter into existing signal file for snooze (atomic)."""
     signal = load_signal()
     signal["nextAttemptAfter"] = time.time() + seconds
     try:
-        with SIGNAL_FILE.open("w") as f:
-            json.dump(signal, f)
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            dir=str(SIGNAL_FILE.parent), suffix=".tmp"
+        )
+        try:
+            with os.fdopen(tmp_fd, "w") as f:
+                json.dump(signal, f)
+            os.replace(tmp_path, str(SIGNAL_FILE))
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
     except Exception as e:
         print(f"[sso-watcher] failed to write snooze: {e}", flush=True)
 
@@ -988,6 +1013,11 @@ def _run_notify_login(profile: str) -> str:
             aws_proc.kill()
             aws_proc.wait()
             return "failed"
+        finally:
+            try:
+                webview.stdin.close()
+            except Exception:
+                pass
 
         # Now poll aws process for completion, same as run_aws_sso_login
         deadline = time.time() + SSO_LOGIN_TIMEOUT

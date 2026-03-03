@@ -18,18 +18,18 @@ tests/
 │   ├── sample_sso_token_expired.json
 │   └── sample_aws_config.ini
 └── unit/
-    ├── test_s3proxy.py      # S3 proxy tests (19 tests)
-    └── test_watcher.py      # SSO watcher tests (177 tests)
+    ├── test_s3proxy.py      # S3 proxy tests (22 tests)
+    └── test_watcher.py      # SSO watcher tests (202 tests)
 ```
 
 ## Test Coverage
 
-**221 passing tests** (19 s3proxy + 202 watcher)
+**224 passing tests** (22 s3proxy + 202 watcher)
 
 ### S3 Proxy Tests (`tests/unit/test_s3proxy.py`)
 
-**Cache Operations** (4 tests):
-- File path conversion, parent directory creation, cache initialization
+**Cache Operations** (6 tests):
+- File path conversion, parent directory creation, cache initialization, path traversal blocking
 
 **S3 Client Management** (4 tests):
 - Client creation, credential handling, client reuse and refresh
@@ -37,8 +37,8 @@ tests/
 **S3 Fetch Operations** (3 tests):
 - Successful fetch, file not found, leading slash normalization
 
-**Flask Endpoints** (5 tests):
-- Health check (healthy/unhealthy), file serving, cache miss, 404
+**Flask Endpoints** (6 tests):
+- Health check (healthy/unhealthy), file serving, cache miss, 404, path traversal 403
 
 **Directory Listing** (1 test):
 - Shows cached entries

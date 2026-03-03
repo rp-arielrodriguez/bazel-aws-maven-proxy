@@ -59,7 +59,7 @@ import json, os
 try:
     d = json.load(open(os.environ['SIGNAL_FILE']))
     print(d.get('nextAttemptAfter', ''))
-except: pass
+except Exception: pass
 " 2>/dev/null)
         fi
         if [ -n "$SNOOZE_UNTIL" ]; then

@@ -6,7 +6,7 @@ import mimetypes
 import tempfile
 from pathlib import Path
 from functools import wraps
-from datetime import datetime
+from datetime import datetime, timezone
 
 import boto3
 from botocore.exceptions import ClientError, NoCredentialsError
@@ -31,8 +31,15 @@ CACHE_DIR = os.environ.get('CACHE_DIR', '/data')
 LOG_LEVEL = os.environ.get('LOG_LEVEL', 'info').upper()
 # REFRESH_INTERVAL: how often to re-check credentials (seconds).
 # Env var is in milliseconds for consistency with other config; convert here.
-_refresh_ms = int(os.environ.get('REFRESH_INTERVAL', '60000'))
-REFRESH_INTERVAL = max(_refresh_ms // 1000, 1)  # ms → s, minimum 1s
+try:
+    _refresh_ms = int(os.environ.get('REFRESH_INTERVAL', '60000'))
+except ValueError:
+    logging.getLogger('s3-proxy').warning(
+        "Invalid REFRESH_INTERVAL '%s', falling back to 60000ms",
+        os.environ.get('REFRESH_INTERVAL'))
+    _refresh_ms = 60000
+_refresh_ms = max(_refresh_ms, 5000)  # minimum 5000ms
+REFRESH_INTERVAL = _refresh_ms // 1000  # ms → s
 
 # Set log level based on environment variable
 logger.setLevel(getattr(logging, LOG_LEVEL))
@@ -244,7 +251,7 @@ def directory_listing(s3_client, prefix):
             full_path = os.path.join(local_dir, entry)
             entry_type = 'directory' if os.path.isdir(full_path) else 'file'
             size = os.path.getsize(full_path) if entry_type == 'file' else 0
-            modified = datetime.fromtimestamp(os.path.getmtime(full_path))
+            modified = datetime.fromtimestamp(os.path.getmtime(full_path), tz=timezone.utc)
             local_entries.append({
                 'name': entry,
                 'type': entry_type,

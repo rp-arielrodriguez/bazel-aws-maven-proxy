@@ -24,6 +24,7 @@ depends = ["containers:up", "sso-install"]
 description = "Stop services (containers + watcher agent)"
 depends = ["containers:down"]
 run = """
+set -euo pipefail
 USER_ID=$(id -u)
 LABEL="com.bazel.sso-watcher"
 if launchctl print "gui/$USER_ID/$LABEL" &>/dev/null; then
@@ -77,6 +78,7 @@ run = "bash scripts/sso-logs.sh {{arg(name=\"lines\", default=\"50\")}}"
 [tasks."sso-logs:follow"]
 description = "Stream SSO watcher logs (Ctrl+C to stop)"
 run = """
+set -euo pipefail
 LOG_FILE="$HOME/Library/Logs/sso-watcher.log"
 ERROR_LOG="$HOME/Library/Logs/sso-watcher.error.log"
 echo "Streaming SSO watcher logs (Ctrl+C to exit)..."
@@ -88,6 +90,7 @@ wait $!
 [tasks.sso-logout]
 description = "Logout from AWS SSO (invalidates credentials, triggers renewal)"
 run = """
+set -euo pipefail
 AWS_PROFILE="${AWS_PROFILE:-default}"
 SIGNAL_DIR="$HOME/.aws/sso-renewer"
 
@@ -122,6 +125,7 @@ fi
 [tasks.sso-login]
 description = "Trigger SSO login (signal watcher or run directly in standalone mode)"
 run = """
+set -euo pipefail
 SIGNAL_DIR="$HOME/.aws/sso-renewer"
 SIGNAL_FILE="$SIGNAL_DIR/login-required.json"
 MODE_FILE="$SIGNAL_DIR/mode"
@@ -165,6 +169,7 @@ fi
 [tasks.sso-mode]
 description = "Show current SSO watcher mode"
 run = """
+set -euo pipefail
 MODE_FILE="$HOME/.aws/sso-renewer/mode"
 if [ -f "$MODE_FILE" ]; then
   MODE=$(cat "$MODE_FILE" | tr -d '[:space:]')
@@ -194,6 +199,7 @@ echo "Switch with: mise run sso-mode:notify|auto|silent|standalone"
 [tasks."sso-mode:notify"]
 description = "Switch watcher to notify mode (dialog before login)"
 run = """
+set -euo pipefail
 mkdir -p "$HOME/.aws/sso-renewer"
 echo "notify" > "$HOME/.aws/sso-renewer/mode"
 echo "✓ Switched to notify mode (takes effect within ${SSO_POLL_SECONDS:-5}s)"
@@ -202,6 +208,7 @@ echo "✓ Switched to notify mode (takes effect within ${SSO_POLL_SECONDS:-5}s)"
 [tasks."sso-mode:auto"]
 description = "Switch watcher to auto mode (open webview immediately)"
 run = """
+set -euo pipefail
 mkdir -p "$HOME/.aws/sso-renewer"
 echo "auto" > "$HOME/.aws/sso-renewer/mode"
 echo "✓ Switched to auto mode (takes effect within ${SSO_POLL_SECONDS:-5}s)"
@@ -210,6 +217,7 @@ echo "✓ Switched to auto mode (takes effect within ${SSO_POLL_SECONDS:-5}s)"
 [tasks."sso-mode:silent"]
 description = "Switch watcher to silent mode (token refresh only, no webview)"
 run = """
+set -euo pipefail
 mkdir -p "$HOME/.aws/sso-renewer"
 echo "silent" > "$HOME/.aws/sso-renewer/mode"
 echo "✓ Switched to silent mode — refresh token only, no webview (takes effect within ${SSO_POLL_SECONDS:-5}s)"
@@ -218,6 +226,7 @@ echo "✓ Switched to silent mode — refresh token only, no webview (takes effe
 [tasks."sso-mode:standalone"]
 description = "Switch watcher to standalone mode (manual login only)"
 run = """
+set -euo pipefail
 mkdir -p "$HOME/.aws/sso-renewer"
 echo "standalone" > "$HOME/.aws/sso-renewer/mode"
 echo "✓ Switched to standalone mode — watcher idle, use 'mise run sso-login' to login manually"
@@ -226,6 +235,7 @@ echo "✓ Switched to standalone mode — watcher idle, use 'mise run sso-login'
 [tasks.sso-clean]
 description = "Clean SSO watcher state, signal files, and cooldown"
 run = """
+set -euo pipefail
 STATE_DIR="$HOME/.aws/sso-renewer"
 
 echo "Cleaning SSO watcher state..."

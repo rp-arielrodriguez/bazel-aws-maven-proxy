@@ -24,6 +24,11 @@ services:
       timeout: 10s
       retries: 3
       start_period: 5s
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.5'
 
   sso-monitor:
     build:
@@ -39,8 +44,19 @@ services:
       - ${HOME}/.aws/sso/cache:/root/.aws/sso/cache:ro
       - ${HOME}/.aws/sso-renewer:/signals
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "pgrep", "-f", "monitor.py"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.25'
     depends_on:
-      - s3proxy
+      s3proxy:
+        condition: service_healthy
 
 volumes:
   maven-cache:

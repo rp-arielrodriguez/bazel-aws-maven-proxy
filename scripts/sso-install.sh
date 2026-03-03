@@ -16,6 +16,16 @@ SSO_COOLDOWN_SECONDS="${SSO_COOLDOWN_SECONDS:-600}"
 SSO_POLL_SECONDS="${SSO_POLL_SECONDS:-5}"
 SSO_LOGIN_MODE="${SSO_LOGIN_MODE:-notify}"
 
+# Validate SSO_LOGIN_MODE
+case "$SSO_LOGIN_MODE" in
+    notify|auto|silent|standalone) ;;
+    *)
+        echo "WARNING: Invalid SSO_LOGIN_MODE='$SSO_LOGIN_MODE'. Must be one of: notify, auto, silent, standalone"
+        echo "  Defaulting to 'notify'"
+        SSO_LOGIN_MODE="notify"
+        ;;
+esac
+
 # Check AWS CLI version (>= 2.9 required for silent refresh)
 if ! command -v aws &>/dev/null; then
     echo "ERROR: aws CLI not found. Install with: brew install awscli"
