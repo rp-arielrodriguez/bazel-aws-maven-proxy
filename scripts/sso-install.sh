@@ -46,13 +46,18 @@ WEBVIEW_APP_DIR="$HOME/.aws/sso-renewer/bin/SSOLogin.app"
 WEBVIEW_BIN="$WEBVIEW_APP_DIR/Contents/MacOS/sso-webview"
 
 if command -v swiftc &>/dev/null; then
-    echo "Building SSO login webview..."
-    mkdir -p "$WEBVIEW_APP_DIR/Contents/MacOS" "$WEBVIEW_APP_DIR/Contents/Resources"
-    if swiftc "$WEBVIEW_SRC" -o "$WEBVIEW_BIN" -framework Cocoa -framework WebKit 2>&1; then
-        cp "$WEBVIEW_PLIST" "$WEBVIEW_APP_DIR/Contents/Info.plist"
-        echo "✓ Built webview: $WEBVIEW_APP_DIR"
+    # Skip rebuild if binary exists and source hasn't changed
+    if [ -f "$WEBVIEW_BIN" ] && [ "$WEBVIEW_BIN" -nt "$WEBVIEW_SRC" ] && [ "$WEBVIEW_BIN" -nt "$WEBVIEW_PLIST" ]; then
+        echo "✓ Webview up to date: $WEBVIEW_APP_DIR"
     else
-        echo "⚠ Webview build failed (will fall back to system browser)"
+        echo "Building SSO login webview..."
+        mkdir -p "$WEBVIEW_APP_DIR/Contents/MacOS" "$WEBVIEW_APP_DIR/Contents/Resources"
+        if swiftc "$WEBVIEW_SRC" -o "$WEBVIEW_BIN" -framework Cocoa -framework WebKit 2>&1; then
+            cp "$WEBVIEW_PLIST" "$WEBVIEW_APP_DIR/Contents/Info.plist"
+            echo "✓ Built webview: $WEBVIEW_APP_DIR"
+        else
+            echo "⚠ Webview build failed (will fall back to system browser)"
+        fi
     fi
 else
     echo "⚠ swiftc not found — install Xcode Command Line Tools for sandboxed login window"
