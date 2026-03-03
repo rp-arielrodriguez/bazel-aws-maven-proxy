@@ -87,14 +87,21 @@ fi
 echo "Logging out from AWS SSO (profile: $AWS_PROFILE)..."
 aws sso logout 2>/dev/null || true
 
-# Clear cooldown so watcher reacts immediately when monitor detects expiry
+# Clear cooldown so watcher reacts immediately
 rm -f "$SIGNAL_DIR/last-login-at.txt" 2>/dev/null || true
 
+# Create signal file so watcher triggers renewal without waiting for monitor
+mkdir -p "$SIGNAL_DIR"
+printf '{"profile":"%s","reason":"logout","timestamp":"%s"}\n' \
+  "$AWS_PROFILE" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$SIGNAL_DIR/login-required.json"
+
 echo "✓ Logged out — credentials invalidated"
-if [ "$MODE" = "standalone" ] || [ "$MODE" = "silent" ]; then
+if [ "$MODE" = "standalone" ]; then
   echo "  Login again with: mise run sso-login"
+elif [ "$MODE" = "silent" ]; then
+  echo "  Silent refresh will attempt within ${SSO_POLL_SECONDS:-5}s"
 else
-  echo "  Monitor will detect expiry within ${CHECK_INTERVAL:-60}s"
+  echo "  Watcher will trigger login within ${SSO_POLL_SECONDS:-5}s"
 fi
 """
 

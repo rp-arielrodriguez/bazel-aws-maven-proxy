@@ -16,7 +16,7 @@ else
     echo "  Installed:    ✗ not installed"
     echo ""
     echo "Run: mise run sso-install"
-    exit 1
+    exit 0
 fi
 
 # Running
