@@ -170,7 +170,9 @@ else
         echo "  When prompted for 'SSO registration scopes', press Enter to accept"
         echo "  the default (sso:account:access) — this enables token refresh."
         echo ""
-        aws configure sso
+        if ! aws configure sso; then
+            warn "aws configure sso failed — re-run 'mise run setup' or 'aws configure sso' manually"
+        fi
     else
         echo "  Skipping. Run 'aws configure sso' before starting services."
     fi
