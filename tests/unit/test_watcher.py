@@ -1919,15 +1919,6 @@ class TestRunNotifyLogin:
              patch.object(watcher, '_kill_webview'):
             assert watcher._run_notify_login("prof") == "suppress"
 
-    def test_webview_dismiss_action(self):
-        mock_webview = MagicMock()
-        mock_webview.stdout = iter(["SSO_ACTION:dismiss\n"])
-        mock_webview.poll.return_value = 0
-        mock_webview.stdin = MagicMock()
-        with patch.object(watcher, '_launch_notify_webview', return_value=mock_webview), \
-             patch.object(watcher, '_kill_webview'):
-            assert watcher._run_notify_login("prof") == "dismiss"
-
     def test_webview_window_closed_returns_dismiss(self):
         """Webview sends SSO_WINDOW_CLOSED → dismiss."""
         mock_webview = MagicMock()

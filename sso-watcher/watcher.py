@@ -631,7 +631,7 @@ def _launch_webview(url: str, callback_host: str) -> subprocess.Popen | None:
         return None
     try:
         return subprocess.Popen(
-            ["open", "-a", str(app_bundle), "--args", url, callback_host],
+            ["open", "-a", str(app_bundle), "-n", "--args", url, callback_host],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
@@ -937,8 +937,6 @@ def _run_notify_login(profile: str) -> str:
             return f"snooze:{seconds}"
         elif action == "suppress":
             return "suppress"
-        elif action == "dismiss":
-            return "dismiss"
         elif action != "refresh":
             return "dismiss"
 

@@ -24,7 +24,7 @@ tests/
 
 ## Test Coverage
 
-**222 passing tests** (19 s3proxy + 203 watcher)
+**221 passing tests** (19 s3proxy + 202 watcher)
 
 ### S3 Proxy Tests (`tests/unit/test_s3proxy.py`)
 
@@ -148,7 +148,7 @@ tests/
 **Notify Webview Launch — `TestLaunchNotifyWebview`** (3 tests):
 - Binary missing returns None, mkdtemp failure, Popen failure cleanup
 
-**Notify Login Flow — `TestRunNotifyLogin`** (23 tests):
+**Notify Login Flow — `TestRunNotifyLogin`** (22 tests):
 - Fallback to dialog when webview missing (refresh/fail/snooze/suppress/dismiss)
 - Webview actions: snooze, suppress, dismiss, window closed, no output
 - Webview refresh: URL extracted and sent, no URL returns failed, stdin write fails

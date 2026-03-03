@@ -20,7 +20,7 @@
 //   SSO_ACTION:refresh     — user clicked Refresh (notify mode)
 //   SSO_ACTION:snooze:<N>  — user chose snooze for N seconds
 //   SSO_ACTION:suppress    — user chose Don't Remind
-//   SSO_ACTION:dismiss     — user dismissed (closed window / timeout)
+//   (dismiss is inferred from SSO_WINDOW_CLOSED or SSO_TIMEOUT, not a separate action)
 //
 // Exit codes:
 //   0  callback detected (success)
@@ -454,10 +454,25 @@ final class SSOAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         win.delegate = self
         win.makeKeyAndOrderFront(nil)
 
+        // Float above other windows so notification isn't lost behind
+        // the user's current app (we're launched from a background agent)
+        win.level = .floating
+
         if #available(macOS 14.0, *) {
             NSApp.activate()
         } else {
             NSApp.activate(ignoringOtherApps: true)
+        }
+
+        // Re-activate after a brief delay — macOS sometimes steals focus
+        // back from apps launched via `open -a` from background processes
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            win.makeKeyAndOrderFront(nil)
+            if #available(macOS 14.0, *) {
+                NSApp.activate()
+            } else {
+                NSApp.activate(ignoringOtherApps: true)
+            }
         }
 
         self.window = win
@@ -583,8 +598,10 @@ final class SSOAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func transitionToAuth(url: URL) {
-        // Resize window for login
+        // Drop from floating to normal — user committed to logging in,
+        // no longer need to compete for attention
         if let win = window {
+            win.level = .normal
             let newFrame = NSRect(
                 x: win.frame.midX - Layout.windowWidth / 2,
                 y: win.frame.midY - Layout.windowHeight / 2,
