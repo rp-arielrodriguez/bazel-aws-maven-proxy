@@ -161,17 +161,21 @@ AWS_PROFILE="${AWS_PROFILE:-default}"
 if aws configure get sso_session --profile "$AWS_PROFILE" &>/dev/null; then
     SSO_SESSION=$(aws configure get sso_session --profile "$AWS_PROFILE" 2>/dev/null)
     ok "Profile '$AWS_PROFILE' uses sso-session '$SSO_SESSION'"
+elif aws configure get sso_account_id --profile "$AWS_PROFILE" &>/dev/null; then
+    ok "Profile '$AWS_PROFILE' has SSO configured (legacy style, no sso-session)"
 else
-    warn "Profile '$AWS_PROFILE' has no sso_session configured"
+    warn "Profile '$AWS_PROFILE' has no SSO configured"
     echo ""
-    read -rp "  Run 'aws configure sso' now? [Y/n]: " do_sso
-    if [[ ! "$do_sso" =~ ^[Nn]$ ]]; then
+    read -rp "  Configure SSO now? [Y/n/s(kip permanently)]: " do_sso
+    if [[ "$do_sso" =~ ^[Ss]$ ]]; then
+        echo "  Skipping SSO configuration."
+    elif [[ ! "$do_sso" =~ ^[Nn]$ ]]; then
         echo ""
         echo "  When prompted for 'SSO registration scopes', press Enter to accept"
         echo "  the default (sso:account:access) — this enables token refresh."
         echo ""
         if ! aws configure sso; then
-            warn "aws configure sso failed — re-run 'mise run setup' or 'aws configure sso' manually"
+            warn "aws configure sso failed — run 'aws configure sso' manually"
         fi
     else
         echo "  Skipping. Run 'aws configure sso' before starting services."
