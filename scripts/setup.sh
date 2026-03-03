@@ -112,7 +112,12 @@ if [ ! -f .env ] || [[ "${overwrite:-}" =~ ^[Yy]$ ]]; then
     prompt AWS_REGION   "AWS region"            "us-west-2"
     prompt S3_BUCKET    "S3 bucket name"        "your-maven-bucket"
     prompt PROXY_PORT   "Local proxy port"      "8888"
-    prompt SSO_MODE     "SSO login mode (notify/auto/silent/standalone)" "notify"
+    echo "  SSO login modes (all modes try silent token refresh first):"
+    echo "    notify     — dialog prompt on failure (default)"
+    echo "    auto       — open webview on failure"
+    echo "    silent     — give up on failure (no UI)"
+    echo "    standalone — watcher idles, manual login only"
+    prompt SSO_MODE     "SSO login mode" "notify"
 
     cat > .env <<EOF
 # AWS Configuration
