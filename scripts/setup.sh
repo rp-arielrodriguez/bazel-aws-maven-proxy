@@ -111,7 +111,7 @@ if [ ! -f .env ] || [[ "${overwrite:-}" =~ ^[Yy]$ ]]; then
     prompt AWS_PROFILE  "AWS CLI profile"      "default"
     prompt AWS_REGION   "AWS region"            "us-west-2"
     prompt S3_BUCKET    "S3 bucket name"        "your-maven-bucket"
-    prompt PROXY_PORT   "Local proxy port"      "9000"
+    prompt PROXY_PORT   "Local proxy port"      "8888"
     prompt SSO_MODE     "SSO login mode (notify/auto/silent/standalone)" "notify"
 
     cat > .env <<EOF
@@ -204,8 +204,8 @@ fi
 echo ""
 echo -e "${BOLD}${GREEN}Setup complete!${NC}"
 echo ""
-echo "  Proxy:   http://localhost:${PROXY_PORT:-9000}/"
+echo "  Proxy:   http://localhost:${PROXY_PORT:-8888}/"
 echo "  Logs:    mise run containers:logs"
 echo "  Watcher: mise run sso-status"
-echo "  Health:  curl http://localhost:${PROXY_PORT:-9000}/healthz"
+echo "  Health:  curl http://localhost:${PROXY_PORT:-8888}/healthz"
 echo ""

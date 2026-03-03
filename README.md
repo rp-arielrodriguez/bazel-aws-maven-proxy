@@ -98,7 +98,7 @@ mise run start              # Containers
 
 **.bazelrc**:
 ```
-build --define=maven_repo=http://localhost:9000/
+build --define=maven_repo=http://localhost:8888/
 ```
 
 **WORKSPACE**:
@@ -109,7 +109,7 @@ maven_install(
         "com.example:my-library:1.0.0",
     ],
     repositories = [
-        "http://localhost:9000/",  # S3 proxy
+        "http://localhost:8888/",  # S3 proxy
         "https://repo1.maven.org/maven2",  # Fallback
     ],
 )
@@ -188,7 +188,7 @@ Environment variables in `.env`:
 | `AWS_PROFILE` | AWS CLI profile | `default` |
 | `AWS_REGION` | AWS region for S3 | `us-west-2` |
 | `S3_BUCKET_NAME` | Maven S3 bucket name | Required |
-| `PROXY_PORT` | Local proxy port | `9000` |
+| `PROXY_PORT` | Local proxy port | `8888` |
 | `REFRESH_INTERVAL` | Credential refresh check (ms) | `60000` |
 | `LOG_LEVEL` | Logging level | `info` |
 | `CHECK_INTERVAL` | Monitor check interval (seconds) | `60` |
@@ -203,7 +203,7 @@ Environment variables in `.env`:
 ### Port conflicts
 
 ```bash
-lsof -i :9000
+lsof -i :8888
 # Change in .env: PROXY_PORT=8888
 ```
 

@@ -54,7 +54,7 @@ Environment variables in `.env` (copy from `.env.example`):
 - `AWS_PROFILE`: AWS CLI profile (default: default)
 - `AWS_REGION`: AWS region for S3
 - `S3_BUCKET_NAME`: Maven S3 bucket (required)
-- `PROXY_PORT`: Local port (default: 9000)
+- `PROXY_PORT`: Local port (default: 8888)
 - `REFRESH_INTERVAL`: Proxy credential refresh in ms (default: 60000)
 - `LOG_LEVEL`: Logging level (debug, info, warn, error)
 - `CHECK_INTERVAL`: Monitor check interval in seconds (default: 60)
@@ -183,7 +183,7 @@ See [docs/state-machine.md](docs/state-machine.md) for formal state diagrams (Me
 
 **.bazelrc**:
 ```
-build --define=maven_repo=http://localhost:9000/
+build --define=maven_repo=http://localhost:8888/
 ```
 
 **WORKSPACE**:
@@ -192,7 +192,7 @@ maven_install(
     name = "maven",
     artifacts = [...],
     repositories = [
-        "http://localhost:9000/",  # S3 proxy
+        "http://localhost:8888/",  # S3 proxy
         "https://repo1.maven.org/maven2",  # Fallback
     ],
 )
