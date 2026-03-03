@@ -76,10 +76,20 @@ sed -e "s|{{PYTHON_PATH}}|$PYTHON_PATH|g" \
 
 echo "✓ Installed plist to: $PLIST_DEST"
 
-# Check if already loaded
+# Load launchd agent
 USER_ID=$(id -u)
 LABEL="com.bazel.sso-watcher"
 DOMAIN="gui/$USER_ID"
+
+# Check if GUI domain is available (not available via SSH)
+if ! launchctl print "$DOMAIN" &>/dev/null 2>&1; then
+    echo ""
+    echo "✓ Plist installed. Launchd agent not loaded (no GUI session)."
+    echo "  The agent will start automatically on next console login,"
+    echo "  or load manually with:"
+    echo "    launchctl bootstrap gui/\$(id -u) $PLIST_DEST"
+    exit 0
+fi
 
 if launchctl print "$DOMAIN/$LABEL" &>/dev/null; then
     echo "Agent already loaded, updating..."
