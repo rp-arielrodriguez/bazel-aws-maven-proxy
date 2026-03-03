@@ -526,17 +526,46 @@ SSO_LOGIN_TIMEOUT = int(os.environ.get("SSO_LOGIN_TIMEOUT", "120"))  # seconds
 WEBVIEW_APP = STATE_DIR / "bin" / "SSOLogin.app" / "Contents" / "MacOS" / "sso-webview"
 
 
-def _extract_authorize_url(proc: subprocess.Popen, timeout: float = 10) -> str | None:
-    """Read stdout from aws sso login --no-browser until we find the authorize URL."""
+def _extract_authorize_url(proc: subprocess.Popen, timeout: float = 30) -> str | None:
+    """Read stdout from aws sso login --no-browser until we find the authorize URL.
+
+    Uses select() to avoid blocking indefinitely on readline. The OIDC
+    device registration can take 5-15s before the URL is printed.
+    Falls back to plain iteration if stdout has no fileno (e.g. tests).
+    """
     if proc.stdout is None:
         return None
+    import select as _select
+
     deadline = time.time() + timeout
+
+    # Use non-blocking select if available (real file descriptor)
+    fd = None
+    try:
+        fd = proc.stdout.fileno()
+    except Exception:
+        pass
+
     for line in proc.stdout:
+        if not line:
+            break
         stripped = line.strip()
         if stripped.startswith("https://"):
             return stripped
+        if stripped:
+            print(f"[sso-watcher] aws: {stripped}", flush=True)
         if time.time() > deadline:
             break
+
+        # Wait for next line with timeout (prevents indefinite blocking)
+        if fd is not None:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                break
+            ready, _, _ = _select.select([fd], [], [], min(remaining, 1.0))
+            if not ready:
+                continue  # timeout on select, check deadline in loop
+
     return None
 
 
@@ -656,6 +685,10 @@ def run_aws_sso_login(profile: str | None = None) -> int:
         if webview_proc is None:
             print("[sso-watcher] falling back to system browser", flush=True)
             subprocess.Popen(["open", url])
+
+        # Give webview time to launch before checking if it's running
+        if webview_proc is not None:
+            time.sleep(2)
 
         # Poll aws process, also watch for webview exit (user closed window)
         deadline = time.time() + SSO_LOGIN_TIMEOUT
