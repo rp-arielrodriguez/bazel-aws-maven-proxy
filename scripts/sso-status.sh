@@ -36,9 +36,9 @@ else
 fi
 case "$MODE" in
     standalone) echo "  Mode:         $MODE — idle, manual login only" ;;
-    auto)       echo "  Mode:         $MODE — opens browser on expiry" ;;
-    silent)     echo "  Mode:         $MODE — token refresh only, no browser" ;;
-    notify)     echo "  Mode:         $MODE — asks before opening browser" ;;
+    auto)       echo "  Mode:         $MODE — opens webview on expiry" ;;
+    silent)     echo "  Mode:         $MODE — token refresh only, no webview" ;;
+    notify)     echo "  Mode:         $MODE — asks before opening webview" ;;
     *)          echo "  Mode:         $MODE (unknown)" ;;
 esac
 
@@ -54,10 +54,10 @@ if [ -f "$SIGNAL_FILE" ]; then
         # Check if snooze is active
         SNOOZE_UNTIL=""
         if command -v python3 &>/dev/null; then
-            SNOOZE_UNTIL=$(python3 -c "
-import json, sys
+            SNOOZE_UNTIL=$(SIGNAL_FILE="$SIGNAL_FILE" python3 -c "
+import json, os
 try:
-    d = json.load(open('$SIGNAL_FILE'))
+    d = json.load(open(os.environ['SIGNAL_FILE']))
     print(d.get('nextAttemptAfter', ''))
 except: pass
 " 2>/dev/null)
@@ -71,7 +71,7 @@ except: pass
         # Next action (only in notify/auto)
         COOLDOWN_FILE="$STATE_DIR/last-login-at.txt"
         if [ -f "$COOLDOWN_FILE" ]; then
-            LAST=$(cat "$COOLDOWN_FILE" | cut -d. -f1)
+            LAST=$(cut -d. -f1 < "$COOLDOWN_FILE")
             COOLDOWN="${SSO_COOLDOWN_SECONDS:-600}"
             NOW=$(date +%s)
             ELAPSED=$((NOW - LAST))
@@ -86,14 +86,14 @@ except: pass
                 fi
             else
                 if [ "$MODE" = "auto" ]; then
-                    echo "  Next login:   ready (will open browser within ${SSO_POLL_SECONDS:-5}s)"
+                    echo "  Next login:   ready (will open webview within ${SSO_POLL_SECONDS:-5}s)"
                 else
                     echo "  Next dialog:  ready (will show within ${SSO_POLL_SECONDS:-5}s)"
                 fi
             fi
         else
             if [ "$MODE" = "auto" ]; then
-                echo "  Next login:   ready (will open browser within ${SSO_POLL_SECONDS:-5}s)"
+                echo "  Next login:   ready (will open webview within ${SSO_POLL_SECONDS:-5}s)"
             else
                 echo "  Next dialog:  ready (will show within ${SSO_POLL_SECONDS:-5}s)"
             fi

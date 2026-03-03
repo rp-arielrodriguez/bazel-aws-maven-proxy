@@ -37,6 +37,7 @@ import sys
 import time
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlparse, parse_qs
 
 VALID_MODES = ("notify", "auto", "silent", "standalone")
 
@@ -327,7 +328,7 @@ def try_silent_refresh(profile: str) -> bool:
         print("[sso-watcher] silent refresh: no accessToken in response", flush=True)
         return False
 
-    # Update cache file
+    # Update cache file (atomic write to prevent corruption)
     cache_path = cache["_cache_path"]
     try:
         with open(cache_path) as f:
@@ -340,8 +341,15 @@ def try_silent_refresh(profile: str) -> bool:
         if new_refresh:
             cache_data["refreshToken"] = new_refresh
 
-        with open(cache_path, "w") as f:
-            json.dump(cache_data, f)
+        import tempfile
+        tmp_fd, tmp_path = tempfile.mkstemp(dir=str(Path(cache_path).parent), suffix=".tmp")
+        try:
+            with os.fdopen(tmp_fd, "w") as f:
+                json.dump(cache_data, f)
+            os.replace(tmp_path, cache_path)
+        except Exception:
+            os.unlink(tmp_path)
+            raise
 
         exp_str = cache_data.get("expiresAt", "unknown")
         refresh_rotated = "yes" if new_refresh else "no"
@@ -460,9 +468,11 @@ def show_notification(profile: str) -> str:
         - "suppress"         user chose don't remind
         - "dismiss"          user closed/timed out/cancelled
     """
+    # Escape profile name for safe AppleScript injection
+    safe_profile = profile.replace("\\", "\\\\").replace('"', '\\"')
     snooze_items = ", ".join(f'"{k}"' for k in SNOOZE_OPTIONS)
     script = _NOTIFICATION_SCRIPT.format(
-        profile=profile,
+        profile=safe_profile,
         snooze_items=snooze_items,
     )
 
@@ -533,7 +543,6 @@ def _extract_authorize_url(proc: subprocess.Popen, timeout: float = 10) -> str |
 def _extract_callback_host(authorize_url: str) -> str:
     """Extract callback host:port from the redirect_uri query parameter."""
     try:
-        from urllib.parse import urlparse, parse_qs
         params = parse_qs(urlparse(authorize_url).query)
         redirect_uri = params.get("redirect_uri", [""])[0]
         if redirect_uri:

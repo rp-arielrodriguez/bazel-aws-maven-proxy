@@ -4,7 +4,7 @@ set -euo pipefail
 PLIST_TEMPLATE="launchd/com.bazel.sso-watcher.plist"
 PLIST_DEST="$HOME/Library/LaunchAgents/com.bazel.sso-watcher.plist"
 REPO_PATH="$(pwd)"
-PYTHON_PATH="$(which python3)"
+PYTHON_PATH="$(command -v python3)"
 
 # Load configuration from .env if it exists
 if [ -f .env ]; then

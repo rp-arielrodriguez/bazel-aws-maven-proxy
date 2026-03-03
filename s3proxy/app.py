@@ -27,7 +27,10 @@ AWS_PROFILE = os.environ.get('AWS_PROFILE', 'default')
 AWS_REGION = os.environ.get('AWS_REGION', 'us-west-2')
 CACHE_DIR = os.environ.get('CACHE_DIR', '/data')
 LOG_LEVEL = os.environ.get('LOG_LEVEL', 'info').upper()
-REFRESH_INTERVAL = int(os.environ.get('REFRESH_INTERVAL', '300'))  # 5 minutes by default
+# REFRESH_INTERVAL: how often to re-check credentials (seconds).
+# Env var is in milliseconds for consistency with other config; convert here.
+_refresh_ms = int(os.environ.get('REFRESH_INTERVAL', '60000'))
+REFRESH_INTERVAL = max(_refresh_ms // 1000, 1)  # ms → s, minimum 1s
 
 # Set log level based on environment variable
 logger.setLevel(getattr(logging, LOG_LEVEL))
@@ -52,44 +55,39 @@ def get_s3_client():
     """
     Get a boto3 S3 client with current credentials.
     Uses AWS_PROFILE for authentication without attempting token refresh.
+    Thread-safe: staleness check + refresh both inside lock.
     """
-    global s3_client
-    
-    # Initialize or refresh the client only if needed
-    current_time = time.time()
-    global last_credentials_check
-    
-    if s3_client is None or (current_time - last_credentials_check) > REFRESH_INTERVAL:
-        with credentials_lock:
-            try:
-                # Create a session from profile
-                session = boto3.Session(profile_name=AWS_PROFILE)
-                
-                # Extract current credentials without triggering refresh
-                creds = session.get_credentials()
-                if creds is None:
-                    raise Exception("No credentials found for profile")
-                
-                # Explicitly create a client with the extracted credentials
-                # This bypasses boto3's token refresh mechanism
-                s3_client = boto3.client(
-                    's3',
-                    region_name=AWS_REGION,
-                    aws_access_key_id=creds.access_key,
-                    aws_secret_access_key=creds.secret_key,
-                    aws_session_token=creds.token
-                )
-                
-                # Test the client with a simple operation
-                s3_client.list_buckets()
-                
-                last_credentials_check = current_time
-                logger.info("Successfully initialized S3 client with current credentials")
-            except Exception as e:
-                logger.error(f"Error initializing S3 client: {str(e)}")
-                if s3_client is None:
-                    raise
-    
+    global s3_client, last_credentials_check
+
+    with credentials_lock:
+        current_time = time.time()
+        if s3_client is not None and (current_time - last_credentials_check) <= REFRESH_INTERVAL:
+            return s3_client
+
+        try:
+            session = boto3.Session(profile_name=AWS_PROFILE)
+            creds = session.get_credentials()
+            if creds is None:
+                raise Exception("No credentials found for profile")
+
+            s3_client = boto3.client(
+                's3',
+                region_name=AWS_REGION,
+                aws_access_key_id=creds.access_key,
+                aws_secret_access_key=creds.secret_key,
+                aws_session_token=creds.token
+            )
+
+            # Validate with a lightweight call
+            s3_client.list_buckets()
+
+            last_credentials_check = current_time
+            logger.info("Successfully initialized S3 client with current credentials")
+        except Exception as e:
+            logger.error(f"Error initializing S3 client: {str(e)}")
+            if s3_client is None:
+                raise
+
     return s3_client
 
 def with_s3_client(f):
@@ -366,15 +364,18 @@ def directory_listing(s3_client, prefix):
     
     return Response(full_html, mimetype='text/html')
 
-if __name__ == '__main__':
-    # Ensure cache directory exists
+# Ensure cache directory exists (runs on import so gunicorn workers have it).
+# Skip during test imports where CACHE_DIR may not be writable.
+try:
     create_cache_dir_if_not_exists()
-    
-    # Log startup
-    logger.info(f"Starting S3 proxy for bucket: {S3_BUCKET_NAME}")
-    logger.info(f"Using AWS profile: {AWS_PROFILE}")
-    logger.info(f"Using AWS region: {AWS_REGION}")
-    logger.info(f"Cache directory: {CACHE_DIR}")
-    
-    # Run the Flask app
-    app.run(host='0.0.0.0', port=int(os.environ.get('PROXY_PORT', 8888)))
+except OSError:
+    pass
+
+logger.info(f"S3 proxy configured: bucket={S3_BUCKET_NAME}, profile={AWS_PROFILE}, "
+            f"region={AWS_REGION}, cache={CACHE_DIR}, refresh={REFRESH_INTERVAL}s")
+
+if __name__ == '__main__':
+    # Local dev server (container uses gunicorn via Dockerfile CMD)
+    host = os.environ.get('PROXY_HOST', '0.0.0.0')
+    port = int(os.environ.get('PROXY_PORT', 8888))
+    app.run(host=host, port=port, debug=False)

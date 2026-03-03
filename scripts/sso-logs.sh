@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -e
 
 LOG_FILE="$HOME/Library/Logs/sso-watcher.log"
 ERROR_LOG="$HOME/Library/Logs/sso-watcher.error.log"

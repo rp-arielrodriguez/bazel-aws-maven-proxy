@@ -22,22 +22,26 @@ TEST_TYPE="${1:-unit}"
 
 echo -e "${YELLOW}Running ${TEST_TYPE} tests...${NC}\n"
 
+run_pytest() {
+    pytest "$@"
+}
+
 case "$TEST_TYPE" in
     "unit")
         echo "Running fast unit tests..."
-        pytest -m unit -v
+        run_pytest -m unit -v
         ;;
     "integration")
         echo "Running integration tests (requires podman/docker)..."
-        pytest -m integration -v --no-cov
+        run_pytest -m integration -v --no-cov
         ;;
     "all")
         echo "Running all tests with coverage..."
-        pytest -v
+        run_pytest -v
         ;;
     "coverage")
         echo "Running tests and generating HTML coverage report..."
-        pytest --cov-report=html
+        run_pytest --cov-report=html
         echo -e "\n${GREEN}Coverage report generated at htmlcov/index.html${NC}"
         ;;
     "watch")
@@ -51,7 +55,7 @@ case "$TEST_TYPE" in
         ;;
     "quick")
         echo "Running quick smoke tests..."
-        pytest -m unit --maxfail=1 -x
+        run_pytest -m unit --maxfail=1 -x
         ;;
     *)
         echo -e "${RED}Unknown test type: $TEST_TYPE${NC}"

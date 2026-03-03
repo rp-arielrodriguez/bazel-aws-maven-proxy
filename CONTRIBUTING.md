@@ -36,7 +36,7 @@ See [docs/testing.md](docs/testing.md) for test structure and coverage details.
 - Keep PRs focused — one feature or fix per PR
 - Include tests for new behavior
 - Update docs if user-facing behavior changes
-- Ensure all 172 tests pass
+- Ensure all tests pass
 
 ## Code Style
 

@@ -24,7 +24,7 @@ tests/
 
 ## Test Coverage
 
-**172 passing tests** (19 s3proxy + 153 watcher)
+**173 passing tests** (19 s3proxy + 154 watcher)
 
 ### S3 Proxy Tests (`tests/unit/test_s3proxy.py`)
 
@@ -115,10 +115,10 @@ tests/
 **Webview Launch — `TestLaunchWebview`** (3 tests):
 - Binary missing returns None, successful launch, Popen failure
 
-**SSO Login Flow — `TestRunAwsSsoLogin`** (7 tests):
+**SSO Login Flow — `TestRunAwsSsoLogin`** (8 tests):
 - Success with webview, fallback to browser, no URL returns -1
 - Timeout returns -1, login failure, webview killed on timeout
-- Uses --no-browser flag
+- Webview close aborts login, uses --no-browser flag
 
 **Silent Mode Handle Login — `TestSilentModeHandleLogin`** (8 tests):
 - Silent mode success/failure, notify/auto try silent first
