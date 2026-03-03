@@ -28,6 +28,8 @@
 		<string>{{SSO_POLL_SECONDS}}</string>
 		<key>SSO_LOGIN_MODE</key>
 		<string>{{SSO_LOGIN_MODE}}</string>
+		<key>SSO_PROACTIVE_REFRESH_MINUTES</key>
+		<string>{{SSO_PROACTIVE_REFRESH_MINUTES}}</string>
 		<key>PATH</key>
 		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
 	</dict>

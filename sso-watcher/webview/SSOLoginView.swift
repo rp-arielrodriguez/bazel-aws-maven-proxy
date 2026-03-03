@@ -50,6 +50,7 @@ private enum Timing {
     static let windowTimeout: TimeInterval = 300
     static let notifyTimeout: TimeInterval = 120
     static let stdinTimeout: TimeInterval = 45
+    static let errorTimeout: TimeInterval = 30
 }
 
 private enum ExitCode: Int32 {
@@ -182,6 +183,7 @@ final class NotificationView: NSView {
     private var spinner: NSProgressIndicator?
     private var statusLabel: NSTextField?
     private var buttonStack: NSStackView?
+    private var suppressButton: NSButton?
 
     init(profile: String) {
         super.init(frame: .zero)
@@ -264,6 +266,7 @@ final class NotificationView: NSView {
 
         addSubview(stack)
         self.buttonStack = mainButtons
+        self.suppressButton = suppressBtn
 
         NSLayoutConstraint.activate([
             stack.centerXAnchor.constraint(equalTo: centerXAnchor),
@@ -275,14 +278,7 @@ final class NotificationView: NSView {
 
     func showConnecting() {
         buttonStack?.isHidden = true
-        // Hide suppress button (it's a sibling in the parent stack)
-        if let stack = buttonStack?.superview as? NSStackView {
-            for view in stack.arrangedSubviews {
-                if let btn = view as? NSButton, btn.title == "Don't Remind" {
-                    btn.isHidden = true
-                }
-            }
-        }
+        suppressButton?.isHidden = true
         spinner?.isHidden = false
         spinner?.startAnimation(nil)
         statusLabel?.stringValue = "Connecting to SSO..."
@@ -343,7 +339,7 @@ final class SSOAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var terminationReason: ExitCode = .userClosed
 
     private let launchConfig: LaunchConfig
-    private var callbackHost: String
+    private let callbackHost: String
 
     init(config: LaunchConfig) {
         self.launchConfig = config
@@ -391,12 +387,6 @@ final class SSOAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         case .snooze, .suppress:
             break  // already signaled
         }
-    }
-
-    // MARK: - NSWindowDelegate
-
-    func windowWillClose(_ notification: Notification) {
-        // terminationReason is already set by the action that triggered close
     }
 
     // MARK: - Window sizes
@@ -479,6 +469,14 @@ final class SSOAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func setupWebView() {
+        // Clean up previous webview if any (e.g. notify → auth transition)
+        progressObservation?.invalidate()
+        progressObservation = nil
+        webView?.removeFromSuperview()
+        webView = nil
+        progressBar?.removeFromSuperview()
+        progressBar = nil
+
         guard let contentView = window?.contentView else {
             terminationReason = .error
             signal("SSO_ERROR:no content view")
@@ -544,7 +542,6 @@ final class SSOAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         let nv = NotificationView(profile: profile)
         nv.frame = contentView.bounds
-        nv.autoresizingMask = [.width, .height]
         nv.translatesAutoresizingMaskIntoConstraints = false
 
         nv.onRefresh = { [weak self] in self?.handleRefresh() }
@@ -578,7 +575,7 @@ final class SSOAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     self.transitionToAuth(url: url)
                 } else {
                     self.notificationView?.showError("Failed to connect to SSO. Close and retry.")
-                    self.setupTimeout(30)
+                    self.setupTimeout(Timing.errorTimeout)
                 }
             }
         }
@@ -589,8 +586,13 @@ final class SSOAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // The watcher writes the authorize URL after starting aws sso login.
         let deadline = Date().addingTimeInterval(Timing.stdinTimeout)
         while Date() < deadline {
-            if let line = readLine(strippingNewline: true), !line.isEmpty {
-                return URL(string: line)
+            if let line = readLine(strippingNewline: true) {
+                if !line.isEmpty {
+                    return URL(string: line)
+                }
+            } else {
+                // EOF — stdin closed, no point waiting
+                break
             }
             Thread.sleep(forTimeInterval: 0.1)
         }
@@ -609,6 +611,16 @@ final class SSOAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 height: Layout.windowHeight
             )
             win.setFrame(newFrame, display: true, animate: true)
+
+            if let screen = win.screen {
+                let visibleFrame = screen.visibleFrame
+                var adjusted = win.frame
+                if adjusted.maxX > visibleFrame.maxX { adjusted.origin.x = visibleFrame.maxX - adjusted.width }
+                if adjusted.minX < visibleFrame.minX { adjusted.origin.x = visibleFrame.minX }
+                if adjusted.maxY > visibleFrame.maxY { adjusted.origin.y = visibleFrame.maxY - adjusted.height }
+                if adjusted.minY < visibleFrame.minY { adjusted.origin.y = visibleFrame.minY }
+                if adjusted != win.frame { win.setFrame(adjusted, display: true) }
+            }
         }
 
         // Remove notification view
@@ -706,6 +718,9 @@ func parseArguments() -> LaunchConfig? {
 guard let config = parseArguments() else {
     exit(ExitCode.error.rawValue)
 }
+
+// Prevent SIGPIPE crash when parent closes pipe
+Darwin.signal(SIGPIPE, SIG_IGN)
 
 let app = NSApplication.shared
 app.setActivationPolicy(.regular)

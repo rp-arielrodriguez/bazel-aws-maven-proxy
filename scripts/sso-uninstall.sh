@@ -21,5 +21,9 @@ else
     echo "  Plist not found"
 fi
 
+# Clean up webview app bundle
+rm -rf "$HOME/.aws/sso-renewer/bin"
+echo "✓ Removed webview app bundle"
+
 echo ""
 echo "SSO watcher uninstalled"

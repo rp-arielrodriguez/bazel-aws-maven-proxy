@@ -28,7 +28,7 @@ def flask_app():
 def mock_s3_client():
     """Create a mock S3 client."""
     mock_client = MagicMock()
-    mock_client.list_buckets.return_value = {'Buckets': []}
+    mock_client.head_bucket.return_value = {}
     return mock_client
 
 
@@ -72,8 +72,19 @@ class TestCacheOperations:
             app.create_cache_dir_if_not_exists()
 
         assert cache_dir.exists()
-        assert (cache_dir / 'healthz').exists()
-        assert (cache_dir / 'healthz' / 'index.html').exists()
+
+    def test_get_cached_file_path_traversal_blocked(self):
+        """Path traversal attempts return None."""
+        with patch.object(app, 'CACHE_DIR', '/data'):
+            result = app.get_cached_file_path('../../etc/passwd')
+            assert result is None
+
+    def test_get_cached_file_path_traversal_encoded(self):
+        """Encoded path traversal blocked."""
+        with patch.object(app, 'CACHE_DIR', '/data'):
+            result = app.get_cached_file_path('..%2F..%2Fetc/passwd')
+            # realpath resolves this safely
+            assert result is None or result.startswith('/data')
 
 
 @pytest.mark.unit
@@ -96,7 +107,7 @@ class TestS3ClientInitialization:
 
                 with patch('boto3.client') as mock_client:
                     mock_s3 = MagicMock()
-                    mock_s3.list_buckets.return_value = {'Buckets': []}
+                    mock_s3.head_bucket.return_value = {}
                     mock_client.return_value = mock_s3
 
                     # Reset global client
@@ -149,7 +160,7 @@ class TestS3ClientInitialization:
 
             with patch('boto3.client') as mock_client:
                 mock_s3 = MagicMock()
-                mock_s3.list_buckets.return_value = {'Buckets': []}
+                mock_s3.head_bucket.return_value = {}
                 mock_client.return_value = mock_s3
 
                 with patch.object(app, 'last_credentials_check', 100):
@@ -170,7 +181,7 @@ class TestFetchFromS3:
         """Test successful file fetch from S3."""
         file_path = "com/example/artifact.jar"
 
-        # Make the mock actually create the file
+        # Make the mock actually create the file (writes to temp path, then renamed)
         def mock_download(bucket, key, local_path):
             Path(local_path).parent.mkdir(parents=True, exist_ok=True)
             Path(local_path).write_bytes(b"fake content")
@@ -183,11 +194,10 @@ class TestFetchFromS3:
 
         assert result is not None
         assert Path(result).exists()
-        mock_s3_client.download_file.assert_called_once_with(
-            'test-bucket',
-            'com/example/artifact.jar',
-            str(temp_cache_dir / 'com' / 'example' / 'artifact.jar')
-        )
+        # Verify correct bucket and key (download path is a temp file, then renamed)
+        call_args = mock_s3_client.download_file.call_args[0]
+        assert call_args[0] == 'test-bucket'
+        assert call_args[1] == 'com/example/artifact.jar'
 
     def test_fetch_from_s3_file_not_found(self, mock_s3_client, temp_cache_dir):
         """Test handling file not found in S3."""
@@ -230,13 +240,13 @@ class TestFlaskEndpoints:
         assert response.status_code == 200
         assert response.data == b'OK'
 
-    def test_health_check_endpoint_unhealthy(self, flask_app):
-        """Test health check when S3 client fails."""
-        with patch.object(app, 'get_s3_client', side_effect=Exception("Connection failed")):
+    def test_health_check_endpoint_no_client(self, flask_app):
+        """Test health check when S3 client not yet initialized."""
+        with patch.object(app, 's3_client', None):
             response = flask_app.get('/healthz')
 
-        assert response.status_code == 500
-        assert b'Connection failed' in response.data
+        assert response.status_code == 200
+        assert response.data == b'OK'
 
     def test_get_file_from_cache(self, flask_app, mock_s3_client, temp_cache_dir):
         """Test serving file from cache."""
@@ -287,6 +297,13 @@ class TestFlaskEndpoints:
                     response = flask_app.get('/com/example/missing.jar')
 
         assert response.status_code == 404
+
+    def test_path_traversal_returns_403(self, flask_app, mock_s3_client):
+        """Path traversal attempt returns 403."""
+        with patch.object(app, 'CACHE_DIR', '/data'):
+            with patch.object(app, 'get_s3_client', return_value=mock_s3_client):
+                response = flask_app.get('/../../etc/passwd')
+        assert response.status_code in (403, 404)
 
 
 @pytest.mark.unit

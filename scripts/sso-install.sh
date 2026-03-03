@@ -3,7 +3,7 @@ set -euo pipefail
 
 PLIST_TEMPLATE="launchd/com.bazel.sso-watcher.plist"
 PLIST_DEST="$HOME/Library/LaunchAgents/com.bazel.sso-watcher.plist"
-REPO_PATH="$(pwd)"
+REPO_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PYTHON_PATH="$(command -v python3)"
 
 # Load configuration from .env if it exists
@@ -77,6 +77,7 @@ sed -e "s|{{PYTHON_PATH}}|$PYTHON_PATH|g" \
     -e "s|{{SSO_COOLDOWN_SECONDS}}|$SSO_COOLDOWN_SECONDS|g" \
     -e "s|{{SSO_POLL_SECONDS}}|$SSO_POLL_SECONDS|g" \
     -e "s|{{SSO_LOGIN_MODE}}|$SSO_LOGIN_MODE|g" \
+    -e "s|{{SSO_PROACTIVE_REFRESH_MINUTES}}|${SSO_PROACTIVE_REFRESH_MINUTES:-30}|g" \
     "$PLIST_TEMPLATE" > "$PLIST_DEST"
 
 echo "✓ Installed plist to: $PLIST_DEST"

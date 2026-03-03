@@ -11,13 +11,23 @@ fi
 echo "Restarting SSO watcher..."
 
 USER_ID=$(id -u)
+DOMAIN="gui/$USER_ID"
+
+# Check if GUI domain is available (not available via SSH)
+if ! launchctl print "$DOMAIN" &>/dev/null 2>&1; then
+    echo "Error: GUI session not available (running over SSH?)"
+    echo "  The agent can only be restarted from a console session."
+    echo "  Alternatively, load manually after connecting to the console:"
+    echo "    launchctl bootstrap gui/\$(id -u) $PLIST_DEST"
+    exit 1
+fi
 
 # Unload
-launchctl bootout "gui/$USER_ID/com.bazel.sso-watcher" 2>/dev/null || true
+launchctl bootout "$DOMAIN/com.bazel.sso-watcher" 2>/dev/null || true
 echo "✓ Stopped agent"
 
 # Load
-launchctl bootstrap "gui/$USER_ID" "$PLIST_DEST"
+launchctl bootstrap "$DOMAIN" "$PLIST_DEST"
 echo "✓ Started agent"
 
 echo ""

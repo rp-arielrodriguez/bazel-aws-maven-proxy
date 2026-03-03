@@ -288,32 +288,38 @@ class TestHandleLogin:
 
     def test_notify_mode_refresh(self):
         with          patch.object(watcher, 'read_mode', return_value='notify'), \
+             patch.object(watcher, 'try_silent_refresh', return_value=False), \
              patch.object(watcher, '_run_notify_login', return_value="success") as mock_notify:
             assert watcher.handle_login("default") == "success"
             mock_notify.assert_called_once_with("default")
 
     def test_notify_mode_refresh_login_fails(self):
         with          patch.object(watcher, 'read_mode', return_value='notify'), \
+             patch.object(watcher, 'try_silent_refresh', return_value=False), \
              patch.object(watcher, '_run_notify_login', return_value="failed"):
             assert watcher.handle_login("default") == "failed"
 
     def test_notify_mode_dismiss(self):
         with          patch.object(watcher, 'read_mode', return_value='notify'), \
+             patch.object(watcher, 'try_silent_refresh', return_value=False), \
              patch.object(watcher, '_run_notify_login', return_value="dismiss"):
             assert watcher.handle_login("default") == "dismiss"
 
     def test_notify_mode_snooze(self):
         with          patch.object(watcher, 'read_mode', return_value='notify'), \
+             patch.object(watcher, 'try_silent_refresh', return_value=False), \
              patch.object(watcher, '_run_notify_login', return_value="snooze:900"):
             assert watcher.handle_login("default") == "snooze:900"
 
     def test_notify_mode_suppress(self):
         with          patch.object(watcher, 'read_mode', return_value='notify'), \
+             patch.object(watcher, 'try_silent_refresh', return_value=False), \
              patch.object(watcher, '_run_notify_login', return_value="suppress"):
             assert watcher.handle_login("default") == "suppress"
 
     def test_auto_mode_runs_directly(self):
         with          patch.object(watcher, 'read_mode', return_value='auto'), \
+             patch.object(watcher, 'try_silent_refresh', return_value=False), \
              patch.object(watcher, '_run_notify_login') as mock_notify, \
              patch.object(watcher, 'run_aws_sso_login', return_value=0):
             assert watcher.handle_login("default") == "success"
@@ -321,11 +327,13 @@ class TestHandleLogin:
 
     def test_auto_mode_login_failure(self):
         with          patch.object(watcher, 'read_mode', return_value='auto'), \
+             patch.object(watcher, 'try_silent_refresh', return_value=False), \
              patch.object(watcher, 'run_aws_sso_login', return_value=1):
             assert watcher.handle_login("default") == "failed"
 
     def test_notify_mode_uses_provided_profile(self):
         with          patch.object(watcher, 'read_mode', return_value='notify'), \
+             patch.object(watcher, 'try_silent_refresh', return_value=False), \
              patch.object(watcher, '_run_notify_login', return_value="dismiss") as mock_notify:
             watcher.handle_login("staging")
             mock_notify.assert_called_once_with("staging")
@@ -333,12 +341,14 @@ class TestHandleLogin:
     def test_auto_mode_timeout_returns_failed(self):
         """Auto mode: run_aws_sso_login returns -1 (timeout) → 'failed'."""
         with patch.object(watcher, 'read_mode', return_value='auto'), \
+             patch.object(watcher, 'try_silent_refresh', return_value=False), \
              patch.object(watcher, 'run_aws_sso_login', return_value=-1):
             assert watcher.handle_login("default") == "failed"
 
     def test_notify_mode_exception_propagates(self):
         """Exception in _run_notify_login propagates to caller."""
         with patch.object(watcher, 'read_mode', return_value='notify'), \
+             patch.object(watcher, 'try_silent_refresh', return_value=False), \
              patch.object(watcher, '_run_notify_login', side_effect=RuntimeError("boom")):
             with pytest.raises(RuntimeError, match="boom"):
                 watcher.handle_login("default")
@@ -940,12 +950,15 @@ class TestRunAwsSsoLogin:
 
     def test_success_falls_back_to_browser(self, tmp_path):
         proc = self._mock_aws_proc(returncode=0)
-        browser_popen = MagicMock()
-        with patch.object(watcher.subprocess, 'Popen', side_effect=[proc, browser_popen]), \
+        with patch.object(watcher.subprocess, 'Popen', return_value=proc), \
+             patch.object(watcher.subprocess, 'run') as mock_run, \
              patch.object(watcher, '_launch_webview', return_value=None), \
              patch.object(watcher, '_is_webview_running', return_value=True):
             rc = watcher.run_aws_sso_login("test-profile")
             assert rc == 0
+            # Verify browser fallback was called with open
+            open_calls = [c for c in mock_run.call_args_list if c[0][0][0] == "open"]
+            assert len(open_calls) == 1
 
     def test_returns_minus_1_when_no_url(self):
         proc = MagicMock()
@@ -966,6 +979,7 @@ class TestRunAwsSsoLogin:
         proc.poll = MagicMock(return_value=None)  # never finishes
         proc.kill = MagicMock()
         with patch.object(watcher.subprocess, 'Popen', return_value=proc), \
+             patch.object(watcher.subprocess, 'run'), \
              patch.object(watcher, '_launch_webview', return_value=None), \
              patch.object(watcher, 'SSO_LOGIN_TIMEOUT', 0):  # immediate timeout
             rc = watcher.run_aws_sso_login("test-profile")
@@ -975,6 +989,7 @@ class TestRunAwsSsoLogin:
     def test_login_failure_returns_nonzero(self):
         proc = self._mock_aws_proc(returncode=1)
         with patch.object(watcher.subprocess, 'Popen', return_value=proc), \
+             patch.object(watcher.subprocess, 'run'), \
              patch.object(watcher, '_launch_webview', return_value=None):
             rc = watcher.run_aws_sso_login("test-profile")
             assert rc == 1
@@ -1036,7 +1051,8 @@ class TestRunAwsSsoLogin:
             "https://oidc.example.com/authorize?redirect_uri=http%3A%2F%2F127.0.0.1%3A9999%2Fcallback\n",
         ])
         proc.poll = MagicMock(return_value=None)
-        proc.wait = MagicMock(side_effect=subprocess.TimeoutExpired("aws", 10))
+        # First wait(timeout=10) raises, second wait() after kill succeeds
+        proc.wait = MagicMock(side_effect=[subprocess.TimeoutExpired("aws", 10), None])
         proc.kill = MagicMock()
         webview = MagicMock()
         with patch.object(watcher.subprocess, 'Popen', return_value=proc), \
@@ -2157,7 +2173,8 @@ class TestRunNotifyLogin:
 
         # aws poll always None, webview exits after first loop iteration
         mock_aws.poll.return_value = None
-        mock_aws.wait.side_effect = subprocess.TimeoutExpired("aws", 10)
+        # wait(timeout=10) raises, subsequent wait() after kill succeed
+        mock_aws.wait.side_effect = [subprocess.TimeoutExpired("aws", 10), None, None]
         # poll calls: loop check(None), webview check(0=exited), finally check(0)
         mock_webview.poll.side_effect = [None, 0, 0]
 

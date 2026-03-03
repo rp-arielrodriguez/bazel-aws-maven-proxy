@@ -9,6 +9,8 @@ import os
 import sys
 import json
 import time
+import signal as _signal
+import tempfile as _tempfile
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -22,14 +24,14 @@ from botocore.exceptions import (
 
 # Configuration from environment
 AWS_PROFILE = os.environ.get('AWS_PROFILE', 'default')
-CHECK_INTERVAL = int(os.environ.get('CHECK_INTERVAL', '60'))  # seconds
+CHECK_INTERVAL = max(int(os.environ.get('CHECK_INTERVAL', '60')), 5)  # seconds
 SIGNAL_FILE = Path(os.environ.get(
     'SIGNAL_FILE',
     '/signals/login-required.json'
 ))
 
 
-def check_credentials() -> bool:
+def check_credentials(session=None) -> bool:
     """
     Check if credentials are valid using boto3 sts.get_caller_identity().
 
@@ -37,7 +39,8 @@ def check_credentials() -> bool:
         True if valid, False otherwise
     """
     try:
-        session = boto3.Session(profile_name=AWS_PROFILE)
+        if session is None:
+            session = boto3.Session(profile_name=AWS_PROFILE)
         sts = session.client('sts')
         sts.get_caller_identity()
         return True
@@ -70,8 +73,20 @@ def write_signal_file(reason: str = "Credentials expired"):
             "source": "sso-monitor-container"
         }
 
-        with open(SIGNAL_FILE, 'w') as f:
-            json.dump(signal_data, f, indent=2)
+        tmp_fd, tmp_path = _tempfile.mkstemp(
+            dir=str(SIGNAL_FILE.parent),
+            suffix='.tmp'
+        )
+        try:
+            with os.fdopen(tmp_fd, 'w') as f:
+                json.dump(signal_data, f, indent=2)
+            os.replace(tmp_path, str(SIGNAL_FILE))
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
         print(f"[sso-monitor] ✗ Credentials invalid - wrote signal: {SIGNAL_FILE}", flush=True)
 
@@ -82,9 +97,8 @@ def write_signal_file(reason: str = "Credentials expired"):
 def clear_signal_file():
     """Remove signal file when credentials are valid."""
     try:
-        if SIGNAL_FILE.exists():
-            SIGNAL_FILE.unlink()
-            print(f"[sso-monitor] ✓ Credentials valid - cleared signal", flush=True)
+        SIGNAL_FILE.unlink(missing_ok=True)
+        print(f"[sso-monitor] ✓ Credentials valid - cleared signal", flush=True)
     except Exception:
         pass
 
@@ -95,13 +109,17 @@ def main():
     print(f"[sso-monitor] Profile: {AWS_PROFILE}", flush=True)
     print(f"[sso-monitor] Check interval: {CHECK_INTERVAL}s", flush=True)
     print(f"[sso-monitor] Signal file: {SIGNAL_FILE}", flush=True)
+    # Handle SIGTERM from docker stop
+    _signal.signal(_signal.SIGTERM, lambda *_: sys.exit(0))
+
     print("", flush=True)
 
     last_state = None
+    session = boto3.Session(profile_name=AWS_PROFILE)
 
     while True:
         try:
-            credentials_valid = check_credentials()
+            credentials_valid = check_credentials(session=session)
 
             # Only log state changes
             if credentials_valid != last_state:
@@ -121,6 +139,7 @@ def main():
             break
         except Exception as e:
             print(f"[sso-monitor] Error in monitoring loop: {e}", file=sys.stderr, flush=True)
+            last_state = None  # force re-evaluation on recovery
             time.sleep(CHECK_INTERVAL)
 
 

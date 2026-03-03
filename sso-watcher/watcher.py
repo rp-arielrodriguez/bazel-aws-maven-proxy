@@ -32,7 +32,6 @@ import configparser
 import glob
 import json
 import os
-import stat
 import subprocess
 import sys
 import tempfile
@@ -344,7 +343,6 @@ def try_silent_refresh(profile: str) -> bool:
         if new_refresh:
             cache_data["refreshToken"] = new_refresh
 
-        import tempfile
         tmp_fd, tmp_path = tempfile.mkstemp(dir=str(Path(cache_path).parent), suffix=".tmp")
         try:
             with os.fdopen(tmp_fd, "w") as f:
@@ -527,6 +525,7 @@ SSO_LOGIN_TIMEOUT = int(os.environ.get("SSO_LOGIN_TIMEOUT", "120"))  # seconds
 
 # Webview .app bundle path (built by sso-install.sh)
 WEBVIEW_APP = STATE_DIR / "bin" / "SSOLogin.app" / "Contents" / "MacOS" / "sso-webview"
+WEBVIEW_APP_BUNDLE = STATE_DIR / "bin" / "SSOLogin.app"
 
 
 def _extract_authorize_url(proc: subprocess.Popen, timeout: float = 30) -> str | None:
@@ -625,13 +624,12 @@ def _launch_webview(url: str, callback_host: str) -> subprocess.Popen | None:
 
     Returns Popen or None if unavailable.
     """
-    app_bundle = WEBVIEW_APP.parent.parent.parent  # .../SSOLogin.app
     if not WEBVIEW_APP.exists():
         print("[sso-watcher] webview not found, will use system browser", flush=True)
         return None
     try:
         return subprocess.Popen(
-            ["open", "-a", str(app_bundle), "-n", "--args", url, callback_host],
+            ["open", "-a", str(WEBVIEW_APP_BUNDLE), "-n", "--args", url, callback_host],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
@@ -695,6 +693,7 @@ def run_aws_sso_login(profile: str | None = None) -> int:
         if not url:
             print("[sso-watcher] failed to extract authorize URL", flush=True)
             proc.kill()
+            proc.wait()
             return -1
 
         callback_host = _extract_callback_host(url)
@@ -704,7 +703,7 @@ def run_aws_sso_login(profile: str | None = None) -> int:
         webview_proc = _launch_webview(url, callback_host)
         if webview_proc is None:
             print("[sso-watcher] falling back to system browser", flush=True)
-            subprocess.Popen(["open", url])
+            subprocess.run(["open", url], timeout=5)
 
         # Give webview time to launch before checking if it's running
         if webview_proc is not None:
@@ -736,6 +735,7 @@ def run_aws_sso_login(profile: str | None = None) -> int:
                 except subprocess.TimeoutExpired:
                     print("[sso-watcher] aws did not finish after webview close, aborting", flush=True)
                     proc.kill()
+                    proc.wait()
                     return -1
 
             # Secondary exit: credentials became valid while aws CLI hangs.
@@ -747,11 +747,13 @@ def run_aws_sso_login(profile: str | None = None) -> int:
                 if _check_credentials_valid(profile):
                     print("[sso-watcher] credentials valid (detected during wait), killing stale aws process", flush=True)
                     proc.kill()
+                    proc.wait()
                     return 0
 
             if time.time() > deadline:
                 print(f"[sso-watcher] aws sso login timed out after {SSO_LOGIN_TIMEOUT}s", flush=True)
                 proc.kill()
+                proc.wait()
                 return -1
 
             time.sleep(0.5)
@@ -823,7 +825,6 @@ def _launch_notify_webview(profile: str, callback_host: str) -> _WebviewHandle |
 
     Returns _WebviewHandle with stdin/stdout, or None if webview unavailable.
     """
-    app_bundle = WEBVIEW_APP.parent.parent.parent  # .../SSOLogin.app
     if not WEBVIEW_APP.exists():
         print("[sso-watcher] webview not found, falling back to dialog", flush=True)
         return None
@@ -840,18 +841,18 @@ def _launch_notify_webview(profile: str, callback_host: str) -> _WebviewHandle |
         # Launch via `open -a` for proper GUI activation
         # -n = new instance, -W = wait for exit
         open_proc = subprocess.Popen(
-            ["open", "-a", str(app_bundle), "-n", "-W",
+            ["open", "-a", str(WEBVIEW_APP_BUNDLE), "-n", "-W",
              "--stdin", stdin_fifo,
              "--stdout", stdout_fifo,
              "--args", "--notify", profile, callback_host],
             stderr=subprocess.DEVNULL,
         )
 
-        # Open FIFOs — stdout first (read end), then stdin (write end)
-        # Opening a FIFO blocks until the other end opens too, so we open
-        # stdout (our read) in a thread to avoid deadlock with stdin (our write).
+        # Open both FIFOs in threads to avoid deadlock
         stdout_file = [None]
         stdout_err = [None]
+        stdin_file = [None]
+        stdin_err = [None]
 
         def open_stdout():
             try:
@@ -859,18 +860,30 @@ def _launch_notify_webview(profile: str, callback_host: str) -> _WebviewHandle |
             except Exception as e:
                 stdout_err[0] = e
 
-        t = threading.Thread(target=open_stdout, daemon=True)
-        t.start()
+        def open_stdin():
+            try:
+                stdin_file[0] = open(stdin_fifo, "w")
+            except Exception as e:
+                stdin_err[0] = e
 
-        stdin_file = open(stdin_fifo, "w")
-        t.join(timeout=10)
+        t_out = threading.Thread(target=open_stdout, daemon=True)
+        t_in = threading.Thread(target=open_stdin, daemon=True)
+        t_out.start()
+        t_in.start()
+        t_out.join(timeout=10)
+        t_in.join(timeout=10)
 
         if stdout_file[0] is None:
             raise RuntimeError(f"Failed to open stdout FIFO: {stdout_err[0]}")
+        if stdin_file[0] is None:
+            # Close stdout if it opened
+            if stdout_file[0]:
+                stdout_file[0].close()
+            raise RuntimeError(f"Failed to open stdin FIFO: {stdin_err[0]}")
 
         return _WebviewHandle(
             stdout_file=stdout_file[0],
-            stdin_file=stdin_file,
+            stdin_file=stdin_file[0],
             fifo_dir=fifo_dir,
             open_proc=open_proc,
             app_name="AWS SSO Login",
@@ -957,6 +970,7 @@ def _run_notify_login(profile: str) -> str:
         if not url:
             print("[sso-watcher] failed to extract authorize URL", flush=True)
             aws_proc.kill()
+            aws_proc.wait()
             # Tell webview there's an error by closing its stdin
             try:
                 webview.stdin.close()
@@ -965,7 +979,6 @@ def _run_notify_login(profile: str) -> str:
             return "failed"
 
         # Send URL to webview via stdin
-        callback_host = _extract_callback_host(url)
         print(f"[sso-watcher] authorize URL obtained, sending to webview", flush=True)
         try:
             webview.stdin.write(url + "\n")
@@ -973,6 +986,7 @@ def _run_notify_login(profile: str) -> str:
         except Exception as e:
             print(f"[sso-watcher] failed to send URL to webview: {e}", flush=True)
             aws_proc.kill()
+            aws_proc.wait()
             return "failed"
 
         # Now poll aws process for completion, same as run_aws_sso_login
@@ -995,6 +1009,7 @@ def _run_notify_login(profile: str) -> str:
                     return "success" if aws_proc.returncode == 0 else "failed"
                 except subprocess.TimeoutExpired:
                     aws_proc.kill()
+                    aws_proc.wait()
                     return "dismiss"
 
             # Secondary exit: credentials became valid
@@ -1004,11 +1019,13 @@ def _run_notify_login(profile: str) -> str:
                 if _check_credentials_valid(profile):
                     print("[sso-watcher] credentials valid during wait, killing stale aws process", flush=True)
                     aws_proc.kill()
+                    aws_proc.wait()
                     return "success"
 
             if time.time() > deadline:
                 print(f"[sso-watcher] aws sso login timed out after {SSO_LOGIN_TIMEOUT}s", flush=True)
                 aws_proc.kill()
+                aws_proc.wait()
                 return "failed"
 
             time.sleep(0.5)
@@ -1017,6 +1034,7 @@ def _run_notify_login(profile: str) -> str:
         # Clean up: kill webview and aws process if still running
         if aws_proc and aws_proc.poll() is None:
             aws_proc.kill()
+            aws_proc.wait()
         if webview.poll() is None:
             _kill_webview()
         try:

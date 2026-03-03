@@ -34,12 +34,16 @@ COPY app.py .
 # Create data directory for caching
 RUN mkdir -p /data
 
+# Run as non-root user
+RUN useradd --no-create-home --system appuser && chown appuser:appuser /data
+USER appuser
+
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
     CACHE_DIR=/data
 
 # Expose the proxy port
-EXPOSE ${PROXY_PORT:-8888}
+EXPOSE 8888
 
 # Health check using the application's health endpoint
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \

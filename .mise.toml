@@ -21,7 +21,21 @@ description = "Start complete system (containers + SSO watcher)"
 depends = ["containers:up", "sso-install"]
 
 [tasks.stop]
-description = "Stop complete system (containers + SSO watcher)"
+description = "Stop services (containers + watcher agent)"
+depends = ["containers:down"]
+run = """
+USER_ID=$(id -u)
+LABEL="com.bazel.sso-watcher"
+if launchctl print "gui/$USER_ID/$LABEL" &>/dev/null; then
+  launchctl bootout "gui/$USER_ID/$LABEL" 2>/dev/null || true
+  echo "SSO watcher agent stopped"
+else
+  echo "SSO watcher agent not running"
+fi
+"""
+
+[tasks.uninstall]
+description = "Uninstall complete system (containers + SSO watcher)"
 depends = ["containers:down", "sso-uninstall"]
 
 [tasks."containers:up"]

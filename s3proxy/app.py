@@ -3,6 +3,7 @@ import time
 import logging
 import threading
 import mimetypes
+import tempfile
 from pathlib import Path
 from functools import wraps
 from datetime import datetime
@@ -10,6 +11,7 @@ from datetime import datetime
 import boto3
 from botocore.exceptions import ClientError, NoCredentialsError
 from flask import Flask, send_file, abort, request, Response, jsonify
+from markupsafe import escape
 
 # Configure logging
 logging.basicConfig(
@@ -45,11 +47,6 @@ s3_client = None
 def create_cache_dir_if_not_exists():
     """Ensure the cache directory exists."""
     Path(CACHE_DIR).mkdir(parents=True, exist_ok=True)
-    # Create health check endpoint
-    health_dir = Path(CACHE_DIR) / 'healthz'
-    health_dir.mkdir(parents=True, exist_ok=True)
-    with open(health_dir / 'index.html', 'w') as f:
-        f.write('OK')
 
 def get_s3_client():
     """
@@ -58,6 +55,9 @@ def get_s3_client():
     Thread-safe: staleness check + refresh both inside lock.
     """
     global s3_client, last_credentials_check
+
+    if not S3_BUCKET_NAME:
+        raise RuntimeError("S3_BUCKET_NAME environment variable is required")
 
     with credentials_lock:
         current_time = time.time()
@@ -79,7 +79,7 @@ def get_s3_client():
             )
 
             # Validate with a lightweight call
-            s3_client.list_buckets()
+            s3_client.head_bucket(Bucket=S3_BUCKET_NAME)
 
             last_credentials_check = current_time
             logger.info("Successfully initialized S3 client with current credentials")
@@ -87,6 +87,8 @@ def get_s3_client():
             logger.error(f"Error initializing S3 client: {str(e)}")
             if s3_client is None:
                 raise
+            # Backoff: retry after 10% of refresh interval
+            last_credentials_check = current_time - REFRESH_INTERVAL + max(REFRESH_INTERVAL // 10, 5)
 
     return s3_client
 
@@ -111,8 +113,11 @@ def get_cached_file_path(path):
     if path.startswith('/'):
         path = path[1:]
     
-    # Combine with cache directory
-    return os.path.join(CACHE_DIR, path)
+    result = os.path.realpath(os.path.join(CACHE_DIR, path))
+    # Prevent path traversal outside cache directory
+    if not result.startswith(os.path.realpath(CACHE_DIR)):
+        return None
+    return result
 
 def ensure_parent_dir_exists(file_path):
     """Ensure the parent directory of a file exists."""
@@ -130,33 +135,46 @@ def fetch_from_s3(s3_client, path):
         s3_key = s3_key[1:]
     
     local_path = get_cached_file_path(path)
+    if local_path is None:
+        return None
     
     # Ensure the parent directory exists
     ensure_parent_dir_exists(local_path)
     
+    # Atomic write: download to temp file, rename on success
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(local_path))
+    os.close(tmp_fd)
     try:
         logger.info(f"Fetching from S3: {S3_BUCKET_NAME}/{s3_key}")
-        s3_client.download_file(S3_BUCKET_NAME, s3_key, local_path)
+        s3_client.download_file(S3_BUCKET_NAME, s3_key, tmp_path)
+        os.replace(tmp_path, local_path)
         logger.info(f"Successfully cached: {local_path}")
         return local_path
     except ClientError as e:
+        # Clean up temp file on failure
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
         if e.response['Error']['Code'] == 'NoSuchKey':
             logger.warning(f"File not found in S3: {S3_BUCKET_NAME}/{s3_key}")
         else:
             logger.error(f"Error fetching from S3: {str(e)}")
         return None
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 @app.route('/healthz')
 def health_check():
     """Health check endpoint."""
-    # If we get here, the server is running
-    # We also check if we can connect to S3
-    try:
-        get_s3_client()
+    if s3_client is not None:
         return "OK", 200
-    except Exception as e:
-        logger.error(f"Health check failed: {str(e)}")
-        return str(e), 500
+    # No client yet — first request will initialize
+    return "OK", 200
 
 @app.route('/<path:file_path>')
 @app.route('/', defaults={'file_path': ''})
@@ -172,10 +190,19 @@ def get_file(s3_client, file_path):
     
     # Check if file exists in cache
     local_path = get_cached_file_path(file_path)
+    if local_path is None:
+        abort(403)
     
     if os.path.isdir(local_path):
         # If it's a directory, return a listing
         return directory_listing(s3_client, file_path)
+    
+    # Metadata files change frequently; re-fetch to ensure freshness
+    is_metadata = file_path.endswith('maven-metadata.xml') or file_path.endswith('maven-metadata-local.xml')
+    if os.path.exists(local_path) and is_metadata:
+        refreshed = fetch_from_s3(s3_client, file_path)
+        if refreshed:
+            local_path = refreshed
     
     if not os.path.exists(local_path):
         logger.info(f"Cache miss: {file_path}")
@@ -211,7 +238,7 @@ def directory_listing(s3_client, prefix):
     local_dir = get_cached_file_path(prefix)
     local_entries = []
     
-    if os.path.isdir(local_dir):
+    if local_dir is not None and os.path.isdir(local_dir):
         # Get entries from local cache
         for entry in os.listdir(local_dir):
             full_path = os.path.join(local_dir, entry)
@@ -323,7 +350,7 @@ def directory_listing(s3_client, prefix):
     # Add parent directory link if not at root
     if prefix:
         parent = os.path.dirname(prefix.rstrip('/'))
-        parent_url = f"/{parent}" if parent else "/"
+        parent_url = escape(f"/{parent}" if parent else "/")
         entry_rows.append(f"""
             <tr>
                 <td class="directory"><a href="{parent_url}">..</a></td>
@@ -347,18 +374,25 @@ def directory_listing(s3_client, prefix):
         name_class = "directory" if entry['type'] == 'directory' else ""
         name_display = f"{name}/" if entry['type'] == 'directory' else name
         
+        # Escape all user-controlled values to prevent XSS
+        entry_url = escape(entry_url)
+        name_display = escape(name_display)
+        size = escape(size)
+        modified = escape(modified)
+        source = escape(entry['source'])
+        
         entry_rows.append(f"""
             <tr>
                 <td class="{name_class}"><a href="{entry_url}">{name_display}</a></td>
                 <td class="size">{size}</td>
                 <td class="date">{modified}</td>
-                <td class="source">{entry['source']}</td>
+                <td class="source">{source}</td>
             </tr>
         """)
     
     # Complete the HTML
     full_html = html.format(
-        prefix=f"/{prefix}" if prefix else "/",
+        prefix=escape(f"/{prefix}" if prefix else "/"),
         entries="\n".join(entry_rows)
     )
     
