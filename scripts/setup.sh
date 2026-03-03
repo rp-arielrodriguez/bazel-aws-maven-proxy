@@ -200,7 +200,31 @@ mise run sso-install
 echo ""
 
 # -----------------------------------------------------------------------
-# 6. Start containers
+# 6. Pre-flight: trigger macOS permission dialogs
+# -----------------------------------------------------------------------
+echo -e "${BOLD}Checking macOS permissions...${NC}"
+echo "  If prompted, grant permissions — these are needed for SSO login dialogs."
+echo ""
+
+# Trigger "System Events" / Accessibility permission by running a harmless osascript
+if osascript -e 'tell application "System Events" to return name of current user' &>/dev/null; then
+    ok "System Events access"
+else
+    warn "System Events access denied — SSO dialog notifications may not work"
+    echo "       Grant in: System Settings → Privacy & Security → Accessibility"
+fi
+
+# Trigger display dialog permission with a quick test
+if osascript -e 'display dialog "Setup complete — SSO watcher permissions verified." buttons {"OK"} default button "OK" giving up after 10' &>/dev/null; then
+    ok "Dialog permissions"
+else
+    warn "Dialog display failed — SSO notifications may not appear"
+fi
+
+echo ""
+
+# -----------------------------------------------------------------------
+# 7. Start containers
 # -----------------------------------------------------------------------
 read -rp "Start containers now? [Y/n]: " start_containers
 if [[ ! "$start_containers" =~ ^[Nn]$ ]]; then
