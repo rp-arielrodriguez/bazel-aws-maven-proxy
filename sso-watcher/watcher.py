@@ -790,6 +790,33 @@ def run_aws_sso_login(profile: str | None = None) -> int:
             _kill_webview()
 
 
+def write_signal(profile: str, reason: str = "proactive refresh failed") -> None:
+    """Write signal file so notify/webview flow can trigger."""
+    try:
+        SIGNAL_FILE.parent.mkdir(parents=True, exist_ok=True)
+        signal_data = {
+            "profile": profile,
+            "reason": reason,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "source": "sso-watcher-proactive",
+        }
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            dir=str(SIGNAL_FILE.parent), suffix=".tmp"
+        )
+        try:
+            with os.fdopen(tmp_fd, "w") as f:
+                json.dump(signal_data, f)
+            os.replace(tmp_path, str(SIGNAL_FILE))
+        except Exception:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
+    except Exception as e:
+        log.error(f"failed to write signal: {e}")
+
+
 def clear_signal() -> None:
     """Remove signal file."""
     try:
@@ -1178,6 +1205,8 @@ def main() -> int:
     last_proactive_check: float = 0
     # Check token expiry every 60s (not every poll cycle)
     proactive_check_interval = 60
+    proactive_failures = 0
+    max_proactive_failures = 3  # after N failures, write signal and stop proactive
 
     while True:
         try:
@@ -1191,14 +1220,21 @@ def main() -> int:
             # Proactive refresh: check token expiry independently of signal
             if (PROACTIVE_REFRESH_MINUTES > 0
                     and not SIGNAL_FILE.exists()
+                    and proactive_failures < max_proactive_failures
                     and time.time() - last_proactive_check >= proactive_check_interval):
                 last_proactive_check = time.time()
                 if check_token_near_expiry(PROFILE, PROACTIVE_REFRESH_MINUTES):
-                    log.info(f"proactive: token near expiry, attempting silent refresh")
+                    log.info("proactive: token near expiry, attempting silent refresh")
                     if try_silent_refresh(PROFILE):
                         log.info("proactive: token refreshed successfully")
+                        proactive_failures = 0
                     else:
-                        log.info("proactive: silent refresh failed, waiting for signal")
+                        proactive_failures += 1
+                        if proactive_failures >= max_proactive_failures:
+                            log.info(f"proactive: {proactive_failures} consecutive failures, writing signal for interactive login")
+                            write_signal(PROFILE, "proactive silent refresh exhausted")
+                        else:
+                            log.info(f"proactive: silent refresh failed ({proactive_failures}/{max_proactive_failures})")
 
             if should_trigger_login():
                 if not try_acquire_lock():
@@ -1217,6 +1253,7 @@ def main() -> int:
                     if result == "success":
                         write_last_run(time.time())
                         clear_signal()
+                        proactive_failures = 0  # reset so proactive refresh works again
                         log.info("login successful, signal cleared")
                     elif result.startswith("snooze:"):
                         try:

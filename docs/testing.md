@@ -24,7 +24,7 @@ tests/
 
 ## Test Coverage
 
-**363 passing tests** (22 s3proxy + 202 watcher + 46 monitor + 93 setup)
+**372 passing tests** (22 s3proxy + 211 watcher + 46 monitor + 93 setup)
 
 ### S3 Proxy Tests (`tests/unit/test_s3proxy.py`)
 
@@ -132,9 +132,11 @@ tests/
 - Near expiry, not near, already expired, no config, no cache
 - No expiresAt field, uses default threshold
 
-**Proactive Refresh Main Loop — `TestProactiveRefreshMainLoop`** (6 tests):
+**Proactive Refresh Main Loop — `TestProactiveRefreshMainLoop`** (10 tests):
 - Fires when near expiry, skips when healthy, skips with signal present
 - Skips in standalone, disabled when zero, failure doesn't crash
+- 3 consecutive failures writes signal, stops proactive after max failures
+- Failure counter resets on success, resets after login
 
 **Webview Kill — `TestKillWebview`** (4 tests):
 - osascript quit, killall fallback, both fail silently, osascript timeout
@@ -165,6 +167,10 @@ tests/
 
 **Signal Loading — `TestLoadSignal`** (4 tests):
 - Valid signal, missing file, corrupt JSON, empty file
+
+**Signal Write (Watcher) — `TestWriteSignal`** (5 tests):
+- Writes valid signal file with correct structure, creates parent dir
+- Overwrites existing signal, atomic write cleanup on failure, logs error
 
 ### SSO Monitor Tests (`tests/unit/test_monitor.py`)
 

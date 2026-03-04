@@ -148,6 +148,8 @@ This is critical because:
 - Proactive refresh keeps both tokens alive throughout the day
 - After sleep/wake, the first poll checks expiry and refreshes if needed
 
+**Failure backoff:** If silent refresh fails 3 consecutive times (e.g. refresh token is dead), the watcher writes a signal file to trigger interactive login (notify/webview). This prevents infinite retry spam. The failure counter resets on any successful login or successful proactive refresh.
+
 Set `SSO_PROACTIVE_REFRESH_MINUTES=0` to disable.
 
 ### Silent Token Refresh

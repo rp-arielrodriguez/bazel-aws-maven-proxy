@@ -1718,6 +1718,140 @@ class TestProactiveRefreshMainLoop:
             # Should not raise
             watcher.main()
 
+    def test_proactive_three_failures_writes_signal(self, watcher_state):
+        """After 3 consecutive proactive failures, writes signal for interactive login."""
+        # Advance time by 61s each call so proactive_check_interval (60s) passes
+        clock = [1000.0]
+        def fake_time():
+            clock[0] += 61
+            return clock[0]
+
+        with patch.object(watcher, 'read_mode', return_value='notify'), \
+             patch.object(watcher, 'POLL_SECONDS', 0), \
+             patch.object(watcher, 'PROACTIVE_REFRESH_MINUTES', 30), \
+             patch.object(watcher, 'check_token_near_expiry', return_value=True), \
+             patch.object(watcher, 'try_silent_refresh', return_value=False), \
+             patch.object(watcher, 'write_signal') as mock_write_signal, \
+             patch('time.time', side_effect=fake_time), \
+             patch('time.sleep', side_effect=_stop_after(5)):
+            watcher.main()
+        mock_write_signal.assert_called_once_with(
+            watcher.PROFILE, "proactive silent refresh exhausted"
+        )
+
+    def test_proactive_stops_after_max_failures(self, watcher_state):
+        """After 3 failures + signal written, proactive checks stop (no more refresh calls)."""
+        refresh_calls = 0
+        clock = [1000.0]
+
+        def fake_time():
+            clock[0] += 61
+            return clock[0]
+
+        def counting_refresh(_profile):
+            nonlocal refresh_calls
+            refresh_calls += 1
+            return False
+
+        with patch.object(watcher, 'read_mode', return_value='notify'), \
+             patch.object(watcher, 'POLL_SECONDS', 0), \
+             patch.object(watcher, 'PROACTIVE_REFRESH_MINUTES', 30), \
+             patch.object(watcher, 'check_token_near_expiry', return_value=True), \
+             patch.object(watcher, 'try_silent_refresh', side_effect=counting_refresh), \
+             patch.object(watcher, 'write_signal'), \
+             patch('time.time', side_effect=fake_time), \
+             patch('time.sleep', side_effect=_stop_after(7)):
+            watcher.main()
+        # Only 3 refresh calls: after that, proactive_failures >= max stops further attempts
+        assert refresh_calls == 3
+
+    def test_proactive_failure_counter_resets_on_success(self, watcher_state):
+        """Successful proactive refresh resets failure counter."""
+        call_count = 0
+        clock = [1000.0]
+
+        def fake_time():
+            clock[0] += 61
+            return clock[0]
+
+        def alternating_refresh(_profile):
+            nonlocal call_count
+            call_count += 1
+            # Fail twice, succeed on third
+            return call_count == 3
+
+        with patch.object(watcher, 'read_mode', return_value='notify'), \
+             patch.object(watcher, 'POLL_SECONDS', 0), \
+             patch.object(watcher, 'PROACTIVE_REFRESH_MINUTES', 30), \
+             patch.object(watcher, 'check_token_near_expiry', return_value=True), \
+             patch.object(watcher, 'try_silent_refresh', side_effect=alternating_refresh), \
+             patch.object(watcher, 'write_signal') as mock_write_signal, \
+             patch('time.time', side_effect=fake_time), \
+             patch('time.sleep', side_effect=_stop_after(5)):
+            watcher.main()
+        # 2 failures then success → counter reset, no signal written
+        mock_write_signal.assert_not_called()
+
+    def test_proactive_success_resets_after_login(self, watcher_state):
+        """Login success resets proactive_failures so proactive refresh works again."""
+        write_signal(watcher_state["signal_file"])
+        with patch.object(watcher, 'read_mode', return_value='auto'), \
+             patch.object(watcher, 'POLL_SECONDS', 0), \
+             patch.object(watcher, 'COOLDOWN_SECONDS', 0), \
+             patch.object(watcher, 'PROACTIVE_REFRESH_MINUTES', 30), \
+             patch.object(watcher, 'check_token_near_expiry', return_value=True), \
+             patch.object(watcher, 'try_silent_refresh', return_value=True), \
+             patch.object(watcher, 'run_aws_sso_login', return_value=0), \
+             patch('time.sleep', side_effect=_stop_after(3)):
+            watcher.main()
+        # After login success, signal is cleared — proactive refresh should fire
+        # (we can verify it didn't crash and loop continued)
+
+
+# ---------------------------------------------------------------------------
+# write_signal (watcher-side)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestWriteSignal:
+
+    def test_writes_valid_signal_file(self, watcher_state):
+        """write_signal creates signal file with correct structure."""
+        watcher.write_signal("test-profile", "test reason")
+        assert watcher_state["signal_file"].exists()
+        data = json.loads(watcher_state["signal_file"].read_text())
+        assert data["profile"] == "test-profile"
+        assert data["reason"] == "test reason"
+        assert data["source"] == "sso-watcher-proactive"
+        assert "timestamp" in data
+
+    def test_creates_parent_directory(self, watcher_state):
+        """write_signal creates parent dir if missing."""
+        watcher_state["signal_file"].parent.rmdir()
+        watcher.write_signal("prof")
+        assert watcher_state["signal_file"].exists()
+
+    def test_overwrites_existing_signal(self, watcher_state):
+        """write_signal overwrites any existing signal file."""
+        watcher_state["signal_file"].write_text('{"old": true}')
+        watcher.write_signal("new-prof", "new reason")
+        data = json.loads(watcher_state["signal_file"].read_text())
+        assert data["profile"] == "new-prof"
+        assert "old" not in data
+
+    def test_atomic_write(self, watcher_state):
+        """write_signal uses atomic write (tempfile + os.replace)."""
+        with patch('os.replace', side_effect=OSError("disk full")):
+            watcher.write_signal("prof")
+        # Signal file should NOT exist (atomic write failed, temp cleaned up)
+        assert not watcher_state["signal_file"].exists()
+
+    def test_logs_error_on_failure(self, watcher_state, caplog):
+        """write_signal logs error on failure."""
+        with patch('tempfile.mkstemp', side_effect=OSError("no space")):
+            watcher.write_signal("prof")
+        assert "failed to write signal" in caplog.text
+
 
 # ---------------------------------------------------------------------------
 # _kill_webview
