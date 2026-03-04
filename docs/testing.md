@@ -24,7 +24,7 @@ tests/
 
 ## Test Coverage
 
-**224 passing tests** (22 s3proxy + 202 watcher)
+**270 passing tests** (22 s3proxy + 202 watcher + 46 monitor)
 
 ### S3 Proxy Tests (`tests/unit/test_s3proxy.py`)
 
@@ -165,6 +165,46 @@ tests/
 
 **Signal Loading — `TestLoadSignal`** (4 tests):
 - Valid signal, missing file, corrupt JSON, empty file
+
+### SSO Monitor Tests (`tests/unit/test_monitor.py`)
+
+**Module Config — `TestModuleConfig`** (7 tests):
+- CHECK_INTERVAL defaults, env override, clamped minimum, non-integer fallback
+- SIGNAL_FILE and AWS_PROFILE from env
+
+**Credential Checking — `TestCheckCredentials`** (11 tests):
+- Valid credentials, NoCredentialsError, TokenRetrievalError, CredentialRetrievalError
+- ClientError (expired token, invalid token, other codes), EndpointConnectionError
+- Generic exception, no-session fallback
+
+**Signal File Write — `TestWriteSignalFile`** (7 tests):
+- JSON content/fields, default reason, parent dir creation, atomic write
+- Tempfile cleanup on error, permission error handling, overwrite
+
+**Signal File Clear — `TestClearSignalFile`** (3 tests):
+- Remove existing, no error when missing, permission error suppressed
+
+**SIGTERM Handling — `TestSigtermHandling`** (1 test):
+- SIGTERM handler registered, calls sys.exit(0)
+
+**Session Reuse — `TestSessionReuse`** (2 tests):
+- Session created once, passed to check_credentials
+
+**State Transitions — `TestMainLoopStateTransitions`** (6 tests):
+- valid→expired writes signal, expired→valid clears, no spam on same-state
+- None→valid, None→expired transitions
+
+**Loop Interval — `TestMainLoopInterval`** (2 tests):
+- Sleeps CHECK_INTERVAL, sleeps after error
+
+**Error Recovery — `TestMainLoopErrorRecovery`** (3 tests):
+- Exception resets last_state, KeyboardInterrupt clean exit, loop continues
+
+**Startup — `TestMainLoopStartup`** (2 tests):
+- Main calls check_credentials, creates session with profile
+
+**Full Cycle — `TestFullCycle`** (2 tests):
+- valid→expired→valid cycle, multiple transitions
 
 ## Running Tests
 
