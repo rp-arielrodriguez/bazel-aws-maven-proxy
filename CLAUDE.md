@@ -96,8 +96,8 @@ Environment variables in `.env` (copy from `.env.example`):
 - **Key functionality**:
   - Watches `~/.aws/sso-renewer/` for signal files
   - All modes except standalone try silent token refresh first (via cached refresh token)
-  - In `notify` mode (default): silent refresh → dialog with Refresh/Snooze/Don't Remind
-  - In `auto` mode: silent refresh → opens webview immediately
+  - In `notify` mode (default): silent refresh → all-in-one webview (notification page with Refresh/Snooze/Don't Remind → auth on Refresh)
+  - In `auto` mode: silent refresh → opens webview immediately for auth
   - In `silent` mode: silent refresh only, never opens webview/browser
   - In `standalone` mode: watcher idles, manual `mise run sso-login` only
   - Clears signal on success
@@ -143,10 +143,18 @@ See [docs/state-machine.md](docs/state-machine.md) for formal state diagrams (Me
 ┌─────────────────────────────────────┐
 │  SSO Watcher (launchd on host)      │
 │  - Detects signal file              │
-│  - notify: Refresh/Snooze/Don't Remind │
-│  - auto mode: triggers immediately  │
+│  - Tries silent token refresh first │
+│  - Success? Done — no browser needed│
 └──────────────┬──────────────────────┘
-               │ user clicks Refresh / auto
+               │ silent refresh failed
+               ▼ fallback per mode:
+┌─────────────────────────────────────┐
+│  notify: webview (notification→auth)│
+│  auto: webview immediately          │
+│  silent: gives up                   │
+│  standalone: idle (manual only)     │
+└──────────────┬──────────────────────┘
+               │ user completes auth
                ▼
          aws sso login --no-browser
                │ opens webview (or browser fallback)
