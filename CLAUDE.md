@@ -220,3 +220,15 @@ Run tests:
 pytest              # All tests (363)
 ./run_tests.sh      # Helper script
 ```
+
+## Post-Change Checklist (MANDATORY)
+
+After every code change, before committing:
+
+1. **Run full test suite** — `python3 -m pytest --no-cov -q`. Fix failures.
+2. **Grep for stale references** — search all `.md` and `.py` files for outdated test counts, renamed functions, removed behavior descriptions, dead imports.
+3. **Verify docs match behavior** — if a function's behavior changed (e.g. warn→fail, optional→prompted), scan docs/state-machine.md, docs/testing.md, README.md, CLAUDE.md for descriptions that are now wrong.
+4. **Check for dead code** — if a function/constant was renamed or removed, grep the entire repo for old references.
+5. **Verify replay scenarios** — if setup.py changed, run `python3 tests/interactive/replay_setup.py all` (with zeroed delays) to confirm scenarios still work.
+
+Do NOT wait to be asked. Do NOT skip steps. Do NOT commit until all 5 are done.
