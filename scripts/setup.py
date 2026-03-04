@@ -288,14 +288,26 @@ def check_prerequisites(ctx: SetupContext) -> PrereqResult:
         ctx.fail("No container engine — install podman (preferred) or docker")
         result.errors.append("no container engine")
 
-    # swiftc (optional — warning only)
+    # swiftc (optional — needed for sandboxed webview login)
     if ctx.which("swiftc"):
         result.swiftc = ToolInfo("swiftc")
         ctx.ok("swiftc (Xcode CLT)")
     else:
-        ctx.warn("swiftc not found — SSO login will use browser instead of webview")
-        ctx.print("       Install with: xcode-select --install")
-        result.warnings.append("swiftc not found")
+        ctx.warn("swiftc not found — SSO login will fall back to browser (slower, no cookie caching)")
+        choice = ctx.confirm_three_way(
+            "Install Xcode Command Line Tools now? (yes/no/skip)"
+        )
+        if choice == "yes":
+            r = ctx.run_cmd(["xcode-select", "--install"], timeout=300)
+            if r.ok:
+                ctx.ok("Xcode CLT install started — re-run setup after it completes")
+                result.warnings.append("xcode-clt installing")
+            else:
+                ctx.warn("xcode-select --install failed — install manually")
+                result.warnings.append("swiftc not found")
+        else:
+            ctx.print("       SSO login will use browser instead of webview")
+            result.warnings.append("swiftc not found")
 
     return result
 
@@ -480,14 +492,18 @@ def is_gui_session(ctx: SetupContext) -> bool:
     return r.ok
 
 
+PERMISSION_TIMEOUT = 60  # seconds — user should be at the machine during setup
+
+
 def check_macos_permissions(ctx: SetupContext) -> dict:
     """Phase 5: Check System Events and dialog permissions.
 
-    Returns dict with 'system_events' and 'dialog' bool fields.
+    Returns dict with 'system_events', 'dialog', 'skipped', 'failed' fields.
+    Fails hard on denial or timeout — SSO watcher can't function without these.
     """
     ctx.header("Checking macOS permissions...")
 
-    result = {"system_events": False, "dialog": False, "skipped": False}
+    result = {"system_events": False, "dialog": False, "skipped": False, "failed": False}
 
     if not is_gui_session(ctx):
         ctx.warn("No GUI session detected (SSH?) — skipping permission pre-flight")
@@ -498,27 +514,44 @@ def check_macos_permissions(ctx: SetupContext) -> dict:
     ctx.print("  If prompted, grant permissions — these are needed for SSO login dialogs.")
     ctx.print("")
 
+    # System Events access — needed for SSO watcher notifications
     r = ctx.run_cmd([
         "osascript", "-e",
         'tell application "System Events" to return name of current user'
-    ])
+    ], timeout=PERMISSION_TIMEOUT)
     if r.ok:
         ctx.ok("System Events access")
         result["system_events"] = True
+    elif "timeout" in r.stderr:
+        ctx.fail("System Events permission timed out")
+        ctx.print("       Re-run setup and grant when prompted")
+        result["failed"] = True
+        ctx.print("")
+        return result
     else:
-        ctx.warn("System Events access denied — SSO dialog notifications may not work")
-        ctx.print("       Grant in: System Settings → Privacy & Security → Accessibility")
+        ctx.fail("System Events access denied")
+        ctx.print("       Grant in: System Settings → Privacy & Security → Automation")
+        result["failed"] = True
+        ctx.print("")
+        return result
 
+    # Dialog display — verifies the app can show UI
     r = ctx.run_cmd([
         "osascript", "-e",
         'display dialog "Setup complete — SSO watcher permissions verified." '
-        'buttons {"OK"} default button "OK" giving up after 10'
-    ])
+        'buttons {"OK"} default button "OK"'
+    ], timeout=PERMISSION_TIMEOUT)
     if r.ok:
         ctx.ok("Dialog permissions")
         result["dialog"] = True
+    elif "timeout" in r.stderr:
+        ctx.fail("Dialog permission timed out")
+        ctx.print("       Re-run setup and click OK when prompted")
+        result["failed"] = True
     else:
-        ctx.warn("Dialog display failed — SSO notifications may not appear")
+        ctx.fail("Dialog display denied")
+        ctx.print("       Grant in: System Settings → Privacy & Security → Automation")
+        result["failed"] = True
 
     ctx.print("")
     return result
@@ -761,7 +794,9 @@ def run_setup(ctx: SetupContext) -> int:
     install_sso_watcher(ctx)
 
     # Phase 5: macOS permissions
-    check_macos_permissions(ctx)
+    perms = check_macos_permissions(ctx)
+    if perms["failed"]:
+        return 1
 
     # Phase 6: SSO configuration
     sso_configured = configure_sso(ctx, config.aws_profile)

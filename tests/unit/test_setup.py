@@ -208,10 +208,11 @@ class TestCheckAwsVersion:
 # ===================================================================
 
 class TestCheckPrerequisites:
-    def _ctx(self, tools=None, commands=None):
+    def _ctx(self, tools=None, commands=None, three_way=None):
         return MockSetupContext(
             tools=tools or set(),
             commands=commands or {},
+            three_way=three_way or [],
         )
 
     def test_all_present(self):
@@ -317,6 +318,7 @@ class TestCheckPrerequisites:
                 ("aws", "--version"): CmdResult(0, "aws-cli/2.15.0 Python/3.11\n"),
                 ("podman", "--version"): CmdResult(0, "podman version 4.9.0\n"),
             },
+            three_way=["no"],
         )
         r = check_prerequisites(ctx)
         assert r.ok  # swiftc is optional
@@ -324,7 +326,7 @@ class TestCheckPrerequisites:
         assert any("swiftc" in w for w in r.warnings)
 
     def test_all_missing(self):
-        ctx = self._ctx(tools=set())
+        ctx = self._ctx(tools=set(), three_way=["no"])
         r = check_prerequisites(ctx)
         assert not r.ok
         # mise, aws, container
@@ -652,7 +654,7 @@ class TestCheckMacosPermissions:
         return (
             "osascript", "-e",
             'display dialog "Setup complete — SSO watcher permissions verified." '
-            'buttons {"OK"} default button "OK" giving up after 10'
+            'buttons {"OK"} default button "OK"'
         )
 
     def test_all_ok(self):
@@ -667,8 +669,9 @@ class TestCheckMacosPermissions:
         assert r["system_events"] is True
         assert r["dialog"] is True
         assert r["skipped"] is False
+        assert r["failed"] is False
 
-    def test_system_events_denied(self):
+    def test_system_events_denied_fails_setup(self):
         ctx = MockSetupContext(
             env={"DISPLAY": ":0"},
             commands={
@@ -677,10 +680,24 @@ class TestCheckMacosPermissions:
             },
         )
         r = check_macos_permissions(ctx)
+        assert r["failed"] is True
         assert r["system_events"] is False
-        assert r["dialog"] is True
+        # dialog is never reached — early return on System Events failure
+        assert r["dialog"] is False
 
-    def test_dialog_denied(self):
+    def test_system_events_timeout_fails_setup(self):
+        ctx = MockSetupContext(
+            env={"DISPLAY": ":0"},
+            commands={
+                self._osascript_system_events(): CmdResult(-1, "", "timeout"),
+            },
+        )
+        r = check_macos_permissions(ctx)
+        assert r["failed"] is True
+        assert r["system_events"] is False
+        assert any("timed out" in l for l in ctx._output)
+
+    def test_dialog_denied_fails_setup(self):
         ctx = MockSetupContext(
             env={"DISPLAY": ":0"},
             commands={
@@ -689,8 +706,22 @@ class TestCheckMacosPermissions:
             },
         )
         r = check_macos_permissions(ctx)
+        assert r["failed"] is True
         assert r["system_events"] is True
         assert r["dialog"] is False
+
+    def test_dialog_timeout_fails_setup(self):
+        ctx = MockSetupContext(
+            env={"DISPLAY": ":0"},
+            commands={
+                self._osascript_system_events(): CmdResult(0, "user\n"),
+                self._osascript_dialog(): CmdResult(-1, "", "timeout"),
+            },
+        )
+        r = check_macos_permissions(ctx)
+        assert r["failed"] is True
+        assert r["dialog"] is False
+        assert any("timed out" in l for l in ctx._output)
 
     def test_headless_skips(self):
         ctx = MockSetupContext(
@@ -699,8 +730,72 @@ class TestCheckMacosPermissions:
         )
         r = check_macos_permissions(ctx)
         assert r["skipped"] is True
+        assert r["failed"] is False
         assert r["system_events"] is False
         assert r["dialog"] is False
+
+
+# ===================================================================
+# TestCheckPrerequisitesSwiftc
+# ===================================================================
+
+class TestCheckPrerequisitesSwiftc:
+    """Tests for swiftc missing → prompt to install Xcode CLT."""
+
+    def _ctx(self, *, three_way: str, xcode_result: CmdResult = None):
+        cmds = {
+            ("mise", "--version"): CmdResult(0, "2024.1.0\n"),
+            ("aws", "--version"): CmdResult(0, "aws-cli/2.15.0 Python/3.11\n"),
+            ("podman", "--version"): CmdResult(0, "podman version 5.0.0\n"),
+        }
+        if xcode_result is not None:
+            cmds[("xcode-select", "--install")] = xcode_result
+        return MockSetupContext(
+            tools={"mise", "aws", "podman"},  # no swiftc
+            commands=cmds,
+            three_way=[three_way],
+        )
+
+    def test_user_says_yes_install_succeeds(self):
+        ctx = self._ctx(three_way="yes", xcode_result=CmdResult(0))
+        r = check_prerequisites(ctx)
+        assert r.ok
+        assert any("xcode-clt installing" in w for w in r.warnings)
+        assert any("re-run setup" in l for l in ctx._output)
+
+    def test_user_says_yes_install_fails(self):
+        ctx = self._ctx(three_way="yes", xcode_result=CmdResult(1, "", "error"))
+        r = check_prerequisites(ctx)
+        assert r.ok  # swiftc is still optional
+        assert any("swiftc not found" in w for w in r.warnings)
+
+    def test_user_says_no(self):
+        ctx = self._ctx(three_way="no")
+        r = check_prerequisites(ctx)
+        assert r.ok
+        assert any("swiftc not found" in w for w in r.warnings)
+        assert any("browser instead" in l for l in ctx._output)
+
+    def test_user_says_skip(self):
+        ctx = self._ctx(three_way="skip")
+        r = check_prerequisites(ctx)
+        assert r.ok
+        assert any("swiftc not found" in w for w in r.warnings)
+
+    def test_swiftc_present_no_prompt(self):
+        """When swiftc exists, no three_way prompt should fire."""
+        ctx = MockSetupContext(
+            tools={"mise", "aws", "podman", "swiftc"},
+            commands={
+                ("mise", "--version"): CmdResult(0, "2024.1.0\n"),
+                ("aws", "--version"): CmdResult(0, "aws-cli/2.15.0 Python/3.11\n"),
+                ("podman", "--version"): CmdResult(0, "podman version 5.0.0\n"),
+            },
+            three_way=[],  # empty — would crash if consumed
+        )
+        r = check_prerequisites(ctx)
+        assert r.swiftc is not None
+        assert len(r.warnings) == 0
 
 
 # ===================================================================
@@ -1133,3 +1228,39 @@ class TestRunSetup:
             confirms=[True],  # start containers
         )
         assert run_setup(ctx) == 0
+
+    def test_permissions_denied_exits_1(self):
+        """GUI session + permission denied → setup fails."""
+        osascript_se = (
+            "osascript", "-e",
+            'tell application "System Events" to return name of current user'
+        )
+        ctx = self._all_tools_ctx(
+            extra_commands={
+                ("pgrep", "-q", "WindowServer"): CmdResult(0),  # GUI
+                osascript_se: CmdResult(1, "", "not allowed"),
+            },
+            env={"TERM_PROGRAM": "Terminal"},
+        )
+        assert run_setup(ctx) == 1
+
+    def test_permissions_timeout_exits_1(self):
+        """GUI session + dialog timeout → setup fails."""
+        osascript_se = (
+            "osascript", "-e",
+            'tell application "System Events" to return name of current user'
+        )
+        osascript_dlg = (
+            "osascript", "-e",
+            'display dialog "Setup complete — SSO watcher permissions verified." '
+            'buttons {"OK"} default button "OK"'
+        )
+        ctx = self._all_tools_ctx(
+            extra_commands={
+                ("pgrep", "-q", "WindowServer"): CmdResult(0),  # GUI
+                osascript_se: CmdResult(0, "user\n"),
+                osascript_dlg: CmdResult(-1, "", "timeout"),
+            },
+            env={"TERM_PROGRAM": "Terminal"},
+        )
+        assert run_setup(ctx) == 1

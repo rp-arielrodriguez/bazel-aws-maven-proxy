@@ -311,10 +311,10 @@ def scenario_docker_fallback():
 
 
 def scenario_no_swiftc():
-    """swiftc missing — warning only, not blocking."""
+    """swiftc missing — user declines install, continues with browser fallback."""
     scenario_banner(
         "No swiftc (Xcode CLT)",
-        "All required tools present but swiftc missing → warning, continues"
+        "All required tools present but swiftc missing → user declines → browser fallback"
     )
 
     tools = {"mise": "", "aws": "", "podman": ""}  # no swiftc
@@ -325,6 +325,7 @@ def scenario_no_swiftc():
         commands=commands,
         prompts=["default", "us-west-2", "test-bucket", "8888", "notify"],
         confirms=[True],
+        three_way=["no"],  # decline xcode-select --install
         env={"TERM_PROGRAM": "Terminal"},
     )
 
@@ -592,7 +593,7 @@ def scenario_everything_fails():
         "No mise, no aws, no container engine, no swiftc → 3 errors, exit 1"
     )
 
-    ctx = ReplayContext(tools={}, commands={})
+    ctx = ReplayContext(tools={}, commands={}, three_way=["no"])
     rc = run_setup(ctx)
     print(f"\n  {BOLD}Exit code: {rc}{RESET}")
 
@@ -658,7 +659,7 @@ SCENARIOS = {
     "3": ("AWS CLI Too Old (2.7)", scenario_aws_too_old),
     "4": ("No Container Engine", scenario_no_container_engine),
     "5": ("Docker Fallback (no podman)", scenario_docker_fallback),
-    "6": ("No swiftc (warning only)", scenario_no_swiftc),
+    "6": ("No swiftc (user declines install)", scenario_no_swiftc),
     "7": ("Keep Existing .env", scenario_existing_env_keep),
     "8": ("SSO Not Configured + Fails", scenario_sso_not_configured),
     "9": ("SSO Not Configured + Skip", scenario_sso_skip),

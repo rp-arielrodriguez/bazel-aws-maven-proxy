@@ -24,7 +24,7 @@ tests/
 
 ## Test Coverage
 
-**354 passing tests** (22 s3proxy + 202 watcher + 46 monitor + 84 setup)
+**363 passing tests** (22 s3proxy + 202 watcher + 46 monitor + 93 setup)
 
 ### S3 Proxy Tests (`tests/unit/test_s3proxy.py`)
 
@@ -219,6 +219,9 @@ Uses `MockSetupContext` — subclass of `SetupContext` with in-memory filesystem
 **Prerequisites — `TestCheckPrerequisites`** (10 tests):
 - All present, missing each tool, docker fallback, all missing, ok property
 
+**Prerequisites — Swiftc Install — `TestCheckPrerequisitesSwiftc`** (5 tests):
+- User accepts install (succeeds/fails), user declines, user skips, swiftc present skips prompt
+
 **AWS Profiles — `TestListAwsProfiles`** (4 tests):
 - Multiple profiles, no config file, empty, default-section only
 
@@ -243,8 +246,8 @@ Uses `MockSetupContext` — subclass of `SetupContext` with in-memory filesystem
 **GUI Session Detection — `TestIsGuiSession`** (4 tests):
 - DISPLAY set, TERM_PROGRAM set, WindowServer running, headless
 
-**macOS Permissions — `TestCheckMacosPermissions`** (4 tests):
-- All OK, System Events denied, dialog denied, headless skip
+**macOS Permissions — `TestCheckMacosPermissions`** (6 tests):
+- All OK, System Events denied (fail), System Events timeout (fail), dialog denied (fail), dialog timeout (fail), headless skip
 
 **SSO Configuration Check — `TestCheckSsoConfiguration`** (4 tests):
 - Modern sso_session, legacy, none, empty output
@@ -265,8 +268,8 @@ Uses `MockSetupContext` — subclass of `SetupContext` with in-memory filesystem
 **Print Summary — `TestPrintSummary`** (2 tests):
 - Port in output, commands in output
 
-**Full Setup Flow — `TestRunSetup`** (4 tests):
-- Happy path, prereq fail early exit, no SSO flow, login needed flow
+**Full Setup Flow — `TestRunSetup`** (6 tests):
+- Happy path, prereq fail early exit, no SSO flow, login needed flow, permissions denied exits 1, permissions timeout exits 1
 
 ## Running Tests
 

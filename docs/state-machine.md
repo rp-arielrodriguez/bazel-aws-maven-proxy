@@ -229,7 +229,7 @@ flowchart TB
         direction TB
         p1[Check mise] --> p2[Check aws CLI ≥ 2.9]
         p2 --> p3[Check podman/docker]
-        p3 --> p4[Check swiftc — optional]
+        p3 --> p4[Check swiftc — optional, prompts install]
     end
 
     prereqs -->|errors > 0| fail_exit([Exit 1])
@@ -254,10 +254,12 @@ flowchart TB
         g1{GUI session?}
         g1 -->|no| g2[Skip — headless]
         g1 -->|yes| g3[Test System Events]
-        g3 --> g4[Test dialog display]
+        g3 -->|ok| g4[Test dialog display]
+        g3 -->|denied/timeout| perms_fail([Exit 1])
+        g4 -->|denied/timeout| perms_fail
     end
 
-    perms --> sso
+    perms -->|ok or headless| sso
 
     subgraph sso["Phase 6: AWS SSO Config"]
         direction TB
@@ -299,7 +301,7 @@ flowchart TB
 
 ### Setup Error Handling
 
-All phases after prerequisites use **warn-and-continue** — failures produce warnings but don't abort. Only Phase 1 (prerequisites) is a hard gate.
+Most phases after prerequisites use **warn-and-continue** — failures produce warnings but don't abort. Phases 1 (prerequisites) and 5 (permissions) are hard gates.
 
 | Phase | On failure | Behavior |
 |-------|-----------|----------|
@@ -307,7 +309,7 @@ All phases after prerequisites use **warn-and-continue** — failures produce wa
 | 2. .env | — | Always succeeds |
 | 3. mise install | Command fails | Warn, continue |
 | 4. sso-install | Build/load fails | Warn, continue |
-| 5. Permissions | Denied | Warn, continue |
+| 5. Permissions | Denied / timeout (60s) | **Exit 1** — watcher can't function |
 | 6. SSO config | aws configure sso fails | Warn, continue |
 | 7. Login | Login fails / S3 inaccessible | Warn, continue |
 | 8. Containers | compose up fails | Warn, continue |
