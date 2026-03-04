@@ -19,6 +19,7 @@ import boto3
 from botocore.exceptions import (
     NoCredentialsError,
     ClientError,
+    ProfileNotFound,
     TokenRetrievalError,
     CredentialRetrievalError
 )
@@ -53,6 +54,10 @@ def check_credentials(session=None) -> bool:
         sts = session.client('sts')
         sts.get_caller_identity()
         return True
+
+    except ProfileNotFound:
+        logger.warning("Profile '%s' not found in AWS config", AWS_PROFILE)
+        return False
 
     except (NoCredentialsError, TokenRetrievalError, CredentialRetrievalError):
         return False
@@ -124,10 +129,21 @@ def main():
     print("", flush=True)
 
     last_state = None
-    session = boto3.Session(profile_name=AWS_PROFILE)
+    session = None
 
     while True:
         try:
+            if session is None:
+                try:
+                    session = boto3.Session(profile_name=AWS_PROFILE)
+                except ProfileNotFound:
+                    logger.error("Profile '%s' not found — check AWS config mount", AWS_PROFILE)
+                    if last_state is not False:
+                        write_signal_file(f"Profile '{AWS_PROFILE}' not found")
+                        last_state = False
+                    time.sleep(CHECK_INTERVAL)
+                    continue
+
             credentials_valid = check_credentials(session=session)
 
             # Only log state changes

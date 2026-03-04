@@ -24,7 +24,7 @@ tests/
 
 ## Test Coverage
 
-**372 passing tests** (22 s3proxy + 211 watcher + 46 monitor + 93 setup)
+**378 passing tests** (22 s3proxy + 211 watcher + 52 monitor + 93 setup)
 
 ### S3 Proxy Tests (`tests/unit/test_s3proxy.py`)
 
@@ -178,10 +178,10 @@ tests/
 - CHECK_INTERVAL defaults, env override, clamped minimum, non-integer fallback
 - SIGNAL_FILE and AWS_PROFILE from env
 
-**Credential Checking — `TestCheckCredentials`** (11 tests):
+**Credential Checking — `TestCheckCredentials`** (12 tests):
 - Valid credentials, NoCredentialsError, TokenRetrievalError, CredentialRetrievalError
 - ClientError (expired token, invalid token, other codes), EndpointConnectionError
-- Generic exception, no-session fallback
+- ProfileNotFound, generic exception, no-session fallback
 
 **Signal File Write — `TestWriteSignalFile`** (7 tests):
 - JSON content/fields, default reason, parent dir creation, atomic write
@@ -205,6 +205,10 @@ tests/
 
 **Error Recovery — `TestMainLoopErrorRecovery`** (3 tests):
 - Exception resets last_state, KeyboardInterrupt clean exit, loop continues
+
+**ProfileNotFound — `TestMainLoopProfileNotFound`** (5 tests):
+- No crash, writes signal with reason, no spam on repeated failures
+- Retries session each iteration, recovers when profile appears
 
 **Startup — `TestMainLoopStartup`** (2 tests):
 - Main calls check_credentials, creates session with profile

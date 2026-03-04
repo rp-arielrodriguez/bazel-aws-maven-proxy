@@ -237,6 +237,14 @@ class TestCheckCredentials:
         assert result is True
         mock_cls.assert_called_once_with(profile_name='my-profile')
 
+    def test_profile_not_found(self):
+        """ProfileNotFound → False."""
+        from botocore.exceptions import ProfileNotFound
+        mock_session = MagicMock()
+        mock_session.client.side_effect = ProfileNotFound(profile='missing')
+
+        assert monitor.check_credentials(session=mock_session) is False
+
 
 # ---------------------------------------------------------------------------
 # write_signal_file
@@ -413,7 +421,7 @@ class TestSigtermHandling:
 class TestSessionReuse:
 
     def test_session_created_once(self):
-        """boto3.Session created once in main, reused across checks."""
+        """boto3.Session created once (lazily) in main loop, reused across checks."""
         mock_session = MagicMock()
         mock_sts = MagicMock()
         mock_session.client.return_value = mock_sts
@@ -424,7 +432,7 @@ class TestSessionReuse:
              patch('time.sleep', side_effect=_stop_after(3)):
             monitor.main()
 
-        # Session constructor called exactly once (in main)
+        # Session constructor called exactly once (lazy in first iteration)
         mock_cls.assert_called_once_with(profile_name='default')
 
     def test_session_passed_to_check_credentials(self):
@@ -613,6 +621,92 @@ class TestMainLoopErrorRecovery:
 
         # Should have called check 3 times (2 failures + 1 success)
         assert call_count[0] == 3
+
+
+# ---------------------------------------------------------------------------
+# Main loop: ProfileNotFound handling
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestMainLoopProfileNotFound:
+
+    def test_profile_not_found_does_not_crash(self):
+        """ProfileNotFound at session creation → loop continues, no crash."""
+        from botocore.exceptions import ProfileNotFound
+
+        with patch('boto3.Session', side_effect=ProfileNotFound(profile='missing')), \
+             patch.object(monitor, 'write_signal_file') as mock_write, \
+             patch('time.sleep', side_effect=_stop_after(2)):
+            monitor.main()
+
+        # Should write signal once (state transition None→False)
+        mock_write.assert_called_once()
+
+    def test_profile_not_found_writes_signal_with_reason(self):
+        """ProfileNotFound writes signal with descriptive reason."""
+        from botocore.exceptions import ProfileNotFound
+
+        with patch('boto3.Session', side_effect=ProfileNotFound(profile='bad-prof')), \
+             patch.object(monitor, 'AWS_PROFILE', 'bad-prof'), \
+             patch.object(monitor, 'write_signal_file') as mock_write, \
+             patch('time.sleep', side_effect=_stop_after(1)):
+            monitor.main()
+
+        mock_write.assert_called_once_with("Profile 'bad-prof' not found")
+
+    def test_profile_not_found_no_spam(self):
+        """Repeated ProfileNotFound → signal written only once."""
+        from botocore.exceptions import ProfileNotFound
+
+        with patch('boto3.Session', side_effect=ProfileNotFound(profile='missing')), \
+             patch.object(monitor, 'write_signal_file') as mock_write, \
+             patch('time.sleep', side_effect=_stop_after(3)):
+            monitor.main()
+
+        mock_write.assert_called_once()
+
+    def test_profile_not_found_retries_session(self):
+        """ProfileNotFound → retries boto3.Session each iteration."""
+        from botocore.exceptions import ProfileNotFound
+        call_count = [0]
+
+        def session_factory(**kw):
+            call_count[0] += 1
+            raise ProfileNotFound(profile='missing')
+
+        with patch('boto3.Session', side_effect=session_factory), \
+             patch.object(monitor, 'write_signal_file'), \
+             patch('time.sleep', side_effect=_stop_after(3)):
+            monitor.main()
+
+        # Session creation retried each loop iteration
+        assert call_count[0] == 3
+
+    def test_profile_not_found_recovers_when_profile_appears(self):
+        """ProfileNotFound initially → profile appears later → recovery."""
+        from botocore.exceptions import ProfileNotFound
+        call_count = [0]
+        mock_session = MagicMock()
+        mock_sts = MagicMock()
+        mock_session.client.return_value = mock_sts
+        mock_sts.get_caller_identity.return_value = {'Account': '123'}
+
+        def session_factory(**kw):
+            nonlocal call_count
+            call_count[0] += 1
+            if call_count[0] <= 2:
+                raise ProfileNotFound(profile='missing')
+            return mock_session
+
+        with patch('boto3.Session', side_effect=session_factory), \
+             patch.object(monitor, 'write_signal_file') as mock_write, \
+             patch.object(monitor, 'clear_signal_file') as mock_clear, \
+             patch('time.sleep', side_effect=_stop_after(4)):
+            monitor.main()
+
+        # Signal written once (ProfileNotFound), then cleared once (recovery)
+        mock_write.assert_called_once()
+        mock_clear.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
