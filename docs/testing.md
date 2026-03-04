@@ -24,7 +24,7 @@ tests/
 
 ## Test Coverage
 
-**270 passing tests** (22 s3proxy + 202 watcher + 46 monitor)
+**354 passing tests** (22 s3proxy + 202 watcher + 46 monitor + 84 setup)
 
 ### S3 Proxy Tests (`tests/unit/test_s3proxy.py`)
 
@@ -205,6 +205,68 @@ tests/
 
 **Full Cycle — `TestFullCycle`** (2 tests):
 - valid→expired→valid cycle, multiple transitions
+
+### Setup Tests (`tests/unit/test_setup.py`)
+
+Uses `MockSetupContext` — subclass of `SetupContext` with in-memory filesystem, configurable command results, and FIFO prompt queues. No real commands executed, no filesystem touched.
+
+**AWS Version Parsing — `TestParseAwsVersion`** (3 tests):
+- Standard format, no match, empty
+
+**AWS Version Check — `TestCheckAwsVersion`** (7 tests):
+- Exact minimum (2.9), above, below, major 3, major 1, invalid, empty
+
+**Prerequisites — `TestCheckPrerequisites`** (10 tests):
+- All present, missing each tool, docker fallback, all missing, ok property
+
+**AWS Profiles — `TestListAwsProfiles`** (4 tests):
+- Multiple profiles, no config file, empty, default-section only
+
+**Env Config Prompts — `TestPromptEnvConfig`** (4 tests):
+- Defaults, custom values, invalid SSO mode, profiles shown
+
+**Env Content Generation — `TestGenerateEnvContent`** (4 tests):
+- Default config, custom, hardcoded values, commented engine
+
+**Parse Existing Env — `TestParseExistingEnv`** (5 tests):
+- All fields, quoted values, comments, missing file, partial
+
+**Configure Env — `TestConfigureEnv`** (3 tests):
+- Fresh install, keep existing, overwrite
+
+**Install Tools — `TestInstallTools`** (2 tests):
+- Success, failure
+
+**Install SSO Watcher — `TestInstallSsoWatcher`** (2 tests):
+- Success, failure
+
+**GUI Session Detection — `TestIsGuiSession`** (4 tests):
+- DISPLAY set, TERM_PROGRAM set, WindowServer running, headless
+
+**macOS Permissions — `TestCheckMacosPermissions`** (4 tests):
+- All OK, System Events denied, dialog denied, headless skip
+
+**SSO Configuration Check — `TestCheckSsoConfiguration`** (4 tests):
+- Modern sso_session, legacy, none, empty output
+
+**Configure SSO — `TestConfigureSso`** (6 tests):
+- Already configured (modern/legacy), user yes/no/skip, failure
+
+**Credentials Valid — `TestCheckCredentialsValid`** (2 tests):
+- Valid, invalid
+
+**First Login + Validate — `TestFirstLoginAndValidate`** (11 tests):
+- SSO not configured skip, credentials valid, login success/fail
+- Mode file save/restore, S3 validation success/fail/skip, failure restores mode
+
+**Start Containers — `TestStartContainers`** (3 tests):
+- User yes, no, command fails
+
+**Print Summary — `TestPrintSummary`** (2 tests):
+- Port in output, commands in output
+
+**Full Setup Flow — `TestRunSetup`** (4 tests):
+- Happy path, prereq fail early exit, no SSO flow, login needed flow
 
 ## Running Tests
 

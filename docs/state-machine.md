@@ -216,3 +216,98 @@ handling (silent)    | silent fail + creds invalid         | write 30s snooze to
 handling (silent)    | silent fail + creds valid           | clear signal, write cooldown  | polling
 standalone           | any                                | sleep                         | standalone
 ```
+
+## Setup Flow (`mise run setup`)
+
+Interactive first-time setup. Each phase is a function in `scripts/setup.py`.
+
+```mermaid
+flowchart TB
+    start([mise run setup]) --> prereqs
+
+    subgraph prereqs["Phase 1: Prerequisites"]
+        direction TB
+        p1[Check mise] --> p2[Check aws CLI ≥ 2.9]
+        p2 --> p3[Check podman/docker]
+        p3 --> p4[Check swiftc — optional]
+    end
+
+    prereqs -->|errors > 0| fail_exit([Exit 1])
+    prereqs -->|all ok| env
+
+    subgraph env["Phase 2: Configure .env"]
+        direction TB
+        e1{.env exists?}
+        e1 -->|yes| e2{Overwrite?}
+        e2 -->|no| e3[Parse existing .env]
+        e2 -->|yes| e4[Prompt: profile, region, bucket, port, mode]
+        e1 -->|no| e4
+        e4 --> e5[Write .env]
+    end
+
+    env --> tools["Phase 3: mise install (Python)"]
+    tools --> watcher["Phase 4: sso-install (webview + launchd)"]
+    watcher --> perms
+
+    subgraph perms["Phase 5: macOS Permissions"]
+        direction TB
+        g1{GUI session?}
+        g1 -->|no| g2[Skip — headless]
+        g1 -->|yes| g3[Test System Events]
+        g3 --> g4[Test dialog display]
+    end
+
+    perms --> sso
+
+    subgraph sso["Phase 6: AWS SSO Config"]
+        direction TB
+        s1{SSO configured?}
+        s1 -->|modern/legacy| s2[OK]
+        s1 -->|no| s3{Configure now?}
+        s3 -->|yes| s4[aws configure sso]
+        s3 -->|no/skip| s5[Skip]
+    end
+
+    sso --> login
+
+    subgraph login["Phase 7: Login + Validate"]
+        direction TB
+        l1{SSO configured?}
+        l1 -->|no| l2[Skip]
+        l1 -->|yes| l3{Credentials valid?}
+        l3 -->|yes| l4[OK]
+        l3 -->|no| l5[Pause watcher → standalone]
+        l5 --> l6[SSO login via webview]
+        l6 --> l7[Restore watcher mode]
+        l7 --> l8{S3 bucket set?}
+        l4 --> l8
+        l8 -->|yes| l9[Validate S3 access]
+        l8 -->|no/placeholder| l10[Skip]
+    end
+
+    login --> containers
+
+    subgraph containers["Phase 8: Start Containers"]
+        direction TB
+        c1{Start now?}
+        c1 -->|yes| c2[mise run containers:up]
+        c1 -->|no| c3[Skip]
+    end
+
+    containers --> summary([Setup complete!])
+```
+
+### Setup Error Handling
+
+All phases after prerequisites use **warn-and-continue** — failures produce warnings but don't abort. Only Phase 1 (prerequisites) is a hard gate.
+
+| Phase | On failure | Behavior |
+|-------|-----------|----------|
+| 1. Prerequisites | Missing mise/aws/container | **Exit 1** — cannot proceed |
+| 2. .env | — | Always succeeds |
+| 3. mise install | Command fails | Warn, continue |
+| 4. sso-install | Build/load fails | Warn, continue |
+| 5. Permissions | Denied | Warn, continue |
+| 6. SSO config | aws configure sso fails | Warn, continue |
+| 7. Login | Login fails / S3 inaccessible | Warn, continue |
+| 8. Containers | compose up fails | Warn, continue |
