@@ -2,6 +2,7 @@
 Unit tests for sso-watcher service.
 """
 import json
+import logging
 import os
 import subprocess
 import sys
@@ -1782,27 +1783,24 @@ class TestCheckAwsCli:
         with patch.object(watcher.subprocess, 'run', return_value=proc):
             watcher._check_aws_cli()  # should not raise
 
-    def test_low_version_warns(self, capsys):
+    def test_low_version_warns(self, caplog):
         proc = _mock_proc("aws-cli/2.8.0 Python/3.11.0 Darwin/24.0.0", 0)
-        with patch.object(watcher.subprocess, 'run', return_value=proc):
-            watcher._check_aws_cli()
-        output = capsys.readouterr().out
-        assert "WARNING" in output
-        assert "2.8.0" in output
+        with caplog.at_level(logging.WARNING, logger="sso-watcher"):
+            with patch.object(watcher.subprocess, 'run', return_value=proc):
+                watcher._check_aws_cli()
+        assert any("2.8.0" in r.message for r in caplog.records)
 
-    def test_missing_binary(self, capsys):
-        with patch.object(watcher.subprocess, 'run', side_effect=FileNotFoundError):
-            watcher._check_aws_cli()
-        output = capsys.readouterr().out
-        assert "WARNING" in output
-        assert "not found" in output
+    def test_missing_binary(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="sso-watcher"):
+            with patch.object(watcher.subprocess, 'run', side_effect=FileNotFoundError):
+                watcher._check_aws_cli()
+        assert any("not found" in r.message for r in caplog.records)
 
-    def test_generic_exception(self, capsys):
-        with patch.object(watcher.subprocess, 'run', side_effect=RuntimeError("boom")):
-            watcher._check_aws_cli()
-        output = capsys.readouterr().out
-        assert "WARNING" in output
-        assert "could not check" in output
+    def test_generic_exception(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="sso-watcher"):
+            with patch.object(watcher.subprocess, 'run', side_effect=RuntimeError("boom")):
+                watcher._check_aws_cli()
+        assert any("could not check" in r.message for r in caplog.records)
 
     def test_exact_minimum_version(self):
         proc = _mock_proc("aws-cli/2.9.0 Python/3.11.0 Darwin/24.0.0", 0)

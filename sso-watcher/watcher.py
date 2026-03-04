@@ -31,6 +31,7 @@ with `mise run sso-mode:notify|auto|silent|standalone`.
 import configparser
 import glob
 import json
+import logging
 import os
 import queue
 import subprocess
@@ -41,6 +42,13 @@ import time
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse, parse_qs
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [sso-watcher] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+log = logging.getLogger("sso-watcher")
 
 VALID_MODES = ("notify", "auto", "silent", "standalone")
 
@@ -135,12 +143,12 @@ def try_acquire_lock() -> bool:
         try:
             age = time.time() - LOCK_DIR.stat().st_mtime
             if age > LOCK_STALE_SECONDS:
-                print(f"[sso-watcher] removing stale lock (age={int(age)}s)", flush=True)
+                log.info(f"removing stale lock (age={int(age)}s)")
                 LOCK_DIR.rmdir()
                 LOCK_DIR.mkdir(parents=True, exist_ok=False)
                 return True
         except Exception:
-            print(f"[sso-watcher] stale lock detected, age={age:.0f}s", flush=True)
+            log.info(f"stale lock detected, age={age:.0f}s")
         return False
 
 
@@ -279,18 +287,18 @@ def try_silent_refresh(profile: str) -> bool:
     Returns True on success, False if silent refresh is not possible
     or fails (caller should fall back to browser-based login).
     """
-    print(f"[sso-watcher] attempting silent token refresh for {profile}", flush=True)
+    log.info(f"attempting silent token refresh for {profile}")
 
     # Step 1: Get sso-session config
     session = _get_sso_session_config(profile)
     if not session.get("start_url"):
-        print("[sso-watcher] silent refresh: no sso-session config found", flush=True)
+        log.info("silent refresh: no sso-session config found")
         return False
 
     # Step 2: Find cache file
     cache = _find_sso_cache_file(session["start_url"])
     if not cache:
-        print("[sso-watcher] silent refresh: no cache file with refresh token", flush=True)
+        log.info("silent refresh: no cache file with refresh token")
         return False
 
     # Check if client registration is still valid
@@ -299,7 +307,7 @@ def try_silent_refresh(profile: str) -> bool:
         try:
             exp_dt = datetime.fromisoformat(reg_expires.replace("Z", "+00:00"))
             if exp_dt < datetime.now(timezone.utc):
-                print("[sso-watcher] silent refresh: client registration expired", flush=True)
+                log.info("silent refresh: client registration expired")
                 return False
         except Exception:
             pass
@@ -324,19 +332,19 @@ def try_silent_refresh(profile: str) -> bool:
             timeout=30,
         )
     except (subprocess.TimeoutExpired, FileNotFoundError) as e:
-        print(f"[sso-watcher] silent refresh: command error: {e}", flush=True)
+        log.info(f"silent refresh: command error: {e}")
         return False
 
     if proc.returncode != 0:
         stderr = proc.stderr.strip()
-        print(f"[sso-watcher] silent refresh failed: {stderr}", flush=True)
+        log.info(f"silent refresh failed: {stderr}")
         return False
 
     # Step 4: Parse response and write back to cache
     try:
         result = json.loads(proc.stdout)
     except json.JSONDecodeError:
-        print("[sso-watcher] silent refresh: invalid JSON response", flush=True)
+        log.info("silent refresh: invalid JSON response")
         return False
 
     new_access = result.get("accessToken")
@@ -344,7 +352,7 @@ def try_silent_refresh(profile: str) -> bool:
     new_refresh = result.get("refreshToken")
 
     if not new_access:
-        print("[sso-watcher] silent refresh: no accessToken in response", flush=True)
+        log.info("silent refresh: no accessToken in response")
         return False
 
     # Update cache file (atomic write to prevent corruption)
@@ -371,10 +379,10 @@ def try_silent_refresh(profile: str) -> bool:
 
         exp_str = cache_data.get("expiresAt", "unknown")
         refresh_rotated = "yes" if new_refresh else "no"
-        print(f"[sso-watcher] silent refresh successful (expires={exp_str}, new_refresh_token={refresh_rotated})", flush=True)
+        log.info(f"silent refresh successful (expires={exp_str}, new_refresh_token={refresh_rotated})")
         return True
     except Exception as e:
-        print(f"[sso-watcher] silent refresh: failed to write cache: {e}", flush=True)
+        log.info(f"silent refresh: failed to write cache: {e}")
         return False
 
 
@@ -406,7 +414,7 @@ def should_trigger_login() -> bool:
     if isinstance(next_attempt, (int, float)) and time.time() < float(next_attempt):
         return False
 
-    print(f"[sso-watcher] signal detected, triggering login", flush=True)
+    log.info(f"signal detected, triggering login")
     return True
 
 
@@ -502,20 +510,20 @@ def show_notification(profile: str) -> str:
             timeout=135,
         )
     except subprocess.TimeoutExpired:
-        print("[sso-watcher] dialog timed out (subprocess)", flush=True)
+        log.info("dialog timed out (subprocess)")
         return "dismiss"
     except FileNotFoundError:
-        print("[sso-watcher] osascript not found, falling back to auto mode", flush=True)
+        log.info("osascript not found, falling back to auto mode")
         return "refresh"
     except Exception as e:
-        print(f"[sso-watcher] notification error: {e}", flush=True)
+        log.info(f"notification error: {e}")
         return "dismiss"
 
     output = proc.stdout.strip()
 
     # User closed dialog (Escape/Cmd-W) or osascript error
     if proc.returncode != 0:
-        print("[sso-watcher] user closed dialog", flush=True)
+        log.info("user closed dialog")
         return "dismiss"
 
     # Parse the returned action string
@@ -525,14 +533,14 @@ def show_notification(profile: str) -> str:
         label = output[len("snooze:"):]
         seconds = SNOOZE_OPTIONS.get(label)
         if seconds:
-            print(f"[sso-watcher] snoozed for {label}", flush=True)
+            log.info(f"snoozed for {label}")
             return f"snooze:{seconds}"
         return "dismiss"
     elif output == "suppress":
-        print("[sso-watcher] user suppressed reminders", flush=True)
+        log.info("user suppressed reminders")
         return "suppress"
     elif output == "dismiss":
-        print("[sso-watcher] dialog timed out", flush=True)
+        log.info("dialog timed out")
         return "dismiss"
 
     return "dismiss"
@@ -586,7 +594,7 @@ def _extract_authorize_url(proc: subprocess.Popen, timeout: float = 30) -> str |
         if stripped.startswith("https://"):
             return stripped
         if stripped:
-            print(f"[sso-watcher] aws: {stripped}", flush=True)
+            log.info(f"aws: {stripped}")
 
     return None
 
@@ -645,7 +653,7 @@ def _launch_webview(url: str, callback_host: str) -> subprocess.Popen | None:
     Returns Popen or None if unavailable.
     """
     if not WEBVIEW_APP.exists():
-        print("[sso-watcher] webview not found, will use system browser", flush=True)
+        log.info("webview not found, will use system browser")
         return None
     try:
         return subprocess.Popen(
@@ -654,7 +662,7 @@ def _launch_webview(url: str, callback_host: str) -> subprocess.Popen | None:
             stderr=subprocess.DEVNULL,
         )
     except Exception as e:
-        print(f"[sso-watcher] webview launch failed: {e}", flush=True)
+        log.info(f"webview launch failed: {e}")
         return None
 
 
@@ -696,7 +704,7 @@ def run_aws_sso_login(profile: str | None = None) -> int:
     """
     profile = profile or PROFILE
     cmd = ["aws", "sso", "login", "--no-browser", "--profile", profile]
-    print(f"[sso-watcher] running: {' '.join(cmd)} (timeout={SSO_LOGIN_TIMEOUT}s)", flush=True)
+    log.info(f"running: {' '.join(cmd)} (timeout={SSO_LOGIN_TIMEOUT}s)")
 
     proc = subprocess.Popen(
         cmd,
@@ -711,18 +719,18 @@ def run_aws_sso_login(profile: str | None = None) -> int:
         # Extract the authorize URL from aws cli output
         url = _extract_authorize_url(proc)
         if not url:
-            print("[sso-watcher] failed to extract authorize URL", flush=True)
+            log.info("failed to extract authorize URL")
             proc.kill()
             proc.wait()
             return -1
 
         callback_host = _extract_callback_host(url)
-        print("[sso-watcher] authorize URL obtained, opening login window", flush=True)
+        log.info("authorize URL obtained, opening login window")
 
         # Try sandboxed webview first, fall back to system browser
         webview_proc = _launch_webview(url, callback_host)
         if webview_proc is None:
-            print("[sso-watcher] falling back to system browser", flush=True)
+            log.info("falling back to system browser")
             subprocess.run(["open", url], timeout=5)
 
         # Give webview time to launch before checking if it's running
@@ -744,7 +752,7 @@ def run_aws_sso_login(profile: str | None = None) -> int:
             # may have been detected and webview auto-closed — aws needs time
             # to complete the token exchange). Only abort if aws doesn't finish.
             if webview_proc is not None and not _is_webview_running():
-                print("[sso-watcher] webview closed, waiting for aws to finish...", flush=True)
+                log.info("webview closed, waiting for aws to finish...")
                 try:
                     proc.wait(timeout=WEBVIEW_CLOSE_GRACE_SECONDS)
                     output = proc.stdout.read() if proc.stdout else ""
@@ -752,7 +760,7 @@ def run_aws_sso_login(profile: str | None = None) -> int:
                         print(output.strip(), flush=True)
                     return proc.returncode
                 except subprocess.TimeoutExpired:
-                    print("[sso-watcher] aws did not finish after webview close, aborting", flush=True)
+                    log.info("aws did not finish after webview close, aborting")
                     proc.kill()
                     proc.wait()
                     return -1
@@ -764,13 +772,13 @@ def run_aws_sso_login(profile: str | None = None) -> int:
             if now - last_cred_check >= CRED_CHECK_INTERVAL_SECONDS:
                 last_cred_check = now
                 if _check_credentials_valid(profile):
-                    print("[sso-watcher] credentials valid (detected during wait), killing stale aws process", flush=True)
+                    log.info("credentials valid (detected during wait), killing stale aws process")
                     proc.kill()
                     proc.wait()
                     return 0
 
             if time.time() > deadline:
-                print(f"[sso-watcher] aws sso login timed out after {SSO_LOGIN_TIMEOUT}s", flush=True)
+                log.info(f"aws sso login timed out after {SSO_LOGIN_TIMEOUT}s")
                 proc.kill()
                 proc.wait()
                 return -1
@@ -788,7 +796,7 @@ def clear_signal() -> None:
     except FileNotFoundError:
         pass
     except Exception as e:
-        print(f"[sso-watcher] failed to clear signal: {e}", flush=True)
+        log.info(f"failed to clear signal: {e}")
 
 
 def update_signal_snooze(seconds: int) -> None:
@@ -810,7 +818,7 @@ def update_signal_snooze(seconds: int) -> None:
                 pass
             raise
     except Exception as e:
-        print(f"[sso-watcher] failed to write snooze: {e}", flush=True)
+        log.info(f"failed to write snooze: {e}")
 
 
 class _WebviewHandle:
@@ -856,7 +864,7 @@ def _launch_notify_webview(profile: str, callback_host: str) -> _WebviewHandle |
     Returns _WebviewHandle with stdin/stdout, or None if webview unavailable.
     """
     if not WEBVIEW_APP.exists():
-        print("[sso-watcher] webview not found, falling back to dialog", flush=True)
+        log.info("webview not found, falling back to dialog")
         return None
 
     fifo_dir = None
@@ -919,7 +927,7 @@ def _launch_notify_webview(profile: str, callback_host: str) -> _WebviewHandle |
             app_name="AWS SSO Login",
         )
     except Exception as e:
-        print(f"[sso-watcher] webview notify launch failed: {e}", flush=True)
+        log.info(f"webview notify launch failed: {e}")
         if fifo_dir:
             import shutil
             shutil.rmtree(fifo_dir, ignore_errors=True)
@@ -942,9 +950,9 @@ def _run_notify_login(profile: str) -> str:
     webview = _launch_notify_webview(profile, "127.0.0.1")
     if webview is None:
         # Fallback to AppleScript dialog + separate webview
-        print(f"[sso-watcher] showing notification dialog for {profile}", flush=True)
+        log.info(f"showing notification dialog for {profile}")
         action = show_notification(profile)
-        print(f"[sso-watcher] dialog result: {action}", flush=True)
+        log.info(f"dialog result: {action}")
         if action == "refresh":
             rc = run_aws_sso_login(profile)
             return "success" if rc == 0 else "failed"
@@ -957,7 +965,7 @@ def _run_notify_login(profile: str) -> str:
     aws_proc = None
     try:
         # Wait for user action from webview stdout
-        print(f"[sso-watcher] notify webview launched for {profile}", flush=True)
+        log.info(f"notify webview launched for {profile}")
         action_line = None
         for line in webview.stdout:
             stripped = line.strip()
@@ -965,15 +973,15 @@ def _run_notify_login(profile: str) -> str:
                 action_line = stripped
                 break
             elif stripped in ("SSO_WINDOW_CLOSED", "SSO_TIMEOUT") or stripped.startswith("SSO_ERROR"):
-                print(f"[sso-watcher] webview: {stripped}", flush=True)
+                log.info(f"webview: {stripped}")
                 return "dismiss"
 
         if not action_line:
-            print("[sso-watcher] webview closed without action", flush=True)
+            log.info("webview closed without action")
             return "dismiss"
 
         action = action_line[len("SSO_ACTION:"):]
-        print(f"[sso-watcher] webview action: {action}", flush=True)
+        log.info(f"webview action: {action}")
 
         if action.startswith("snooze:"):
             seconds = action[len("snooze:"):]
@@ -985,7 +993,7 @@ def _run_notify_login(profile: str) -> str:
 
         # User clicked Refresh — start aws sso login --no-browser
         cmd = ["aws", "sso", "login", "--no-browser", "--profile", profile]
-        print(f"[sso-watcher] running: {' '.join(cmd)}", flush=True)
+        log.info(f"running: {' '.join(cmd)}")
 
         aws_proc = subprocess.Popen(
             cmd,
@@ -998,7 +1006,7 @@ def _run_notify_login(profile: str) -> str:
         # Extract authorize URL from aws output
         url = _extract_authorize_url(aws_proc)
         if not url:
-            print("[sso-watcher] failed to extract authorize URL", flush=True)
+            log.info("failed to extract authorize URL")
             aws_proc.kill()
             aws_proc.wait()
             # Tell webview there's an error by closing its stdin
@@ -1009,12 +1017,12 @@ def _run_notify_login(profile: str) -> str:
             return "failed"
 
         # Send URL to webview via stdin
-        print(f"[sso-watcher] authorize URL obtained, sending to webview", flush=True)
+        log.info(f"authorize URL obtained, sending to webview")
         try:
             webview.stdin.write(url + "\n")
             webview.stdin.flush()
         except Exception as e:
-            print(f"[sso-watcher] failed to send URL to webview: {e}", flush=True)
+            log.info(f"failed to send URL to webview: {e}")
             aws_proc.kill()
             aws_proc.wait()
             return "failed"
@@ -1037,7 +1045,7 @@ def _run_notify_login(profile: str) -> str:
 
             # Check if webview exited (user closed window during auth)
             if webview.poll() is not None:
-                print("[sso-watcher] webview closed during auth", flush=True)
+                log.info("webview closed during auth")
                 try:
                     aws_proc.wait(timeout=WEBVIEW_CLOSE_GRACE_SECONDS)
                     return "success" if aws_proc.returncode == 0 else "failed"
@@ -1051,13 +1059,13 @@ def _run_notify_login(profile: str) -> str:
             if now - last_cred_check >= CRED_CHECK_INTERVAL_SECONDS:
                 last_cred_check = now
                 if _check_credentials_valid(profile):
-                    print("[sso-watcher] credentials valid during wait, killing stale aws process", flush=True)
+                    log.info("credentials valid during wait, killing stale aws process")
                     aws_proc.kill()
                     aws_proc.wait()
                     return "success"
 
             if time.time() > deadline:
-                print(f"[sso-watcher] aws sso login timed out after {SSO_LOGIN_TIMEOUT}s", flush=True)
+                log.info(f"aws sso login timed out after {SSO_LOGIN_TIMEOUT}s")
                 aws_proc.kill()
                 aws_proc.wait()
                 return "failed"
@@ -1120,7 +1128,7 @@ def handle_login(profile: str) -> str:
 
     # Silent mode: no webview fallback
     if mode == "silent":
-        print("[sso-watcher] silent refresh failed, no browser fallback in silent mode", flush=True)
+        log.info("silent refresh failed, no browser fallback in silent mode")
         return "failed"
 
     if mode == "notify":
@@ -1146,14 +1154,14 @@ def _check_aws_cli() -> None:
         version_str = proc.stdout.strip().split()[0].split("/")[1]
         parts = tuple(int(x) for x in version_str.split(".")[:2])
         if parts < MIN_AWS_CLI_VERSION:
-            print(f"[sso-watcher] WARNING: aws-cli {version_str} < {'.'.join(map(str, MIN_AWS_CLI_VERSION))} "
-                  f"— silent refresh requires >= {'.'.join(map(str, MIN_AWS_CLI_VERSION))}", flush=True)
+            log.warning(f"aws-cli {version_str} < {'.'.join(map(str, MIN_AWS_CLI_VERSION))} "
+                       f"— silent refresh requires >= {'.'.join(map(str, MIN_AWS_CLI_VERSION))}")
         else:
-            print(f"[sso-watcher] aws-cli {version_str}", flush=True)
+            log.info(f"aws-cli {version_str}")
     except FileNotFoundError:
-        print("[sso-watcher] WARNING: aws CLI not found — install with: brew install awscli", flush=True)
+        log.warning("aws CLI not found — install with: brew install awscli")
     except Exception as e:
-        print(f"[sso-watcher] WARNING: could not check aws version: {e}", flush=True)
+        log.warning(f"could not check aws version: {e}")
 
 
 def main() -> int:
@@ -1161,10 +1169,10 @@ def main() -> int:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
 
     _check_aws_cli()
-    print(f"[sso-watcher] watching {SIGNAL_FILE} (profile={PROFILE})", flush=True)
-    print(f"[sso-watcher] mode={read_mode()}, cooldown={COOLDOWN_SECONDS}s, poll={POLL_SECONDS}s", flush=True)
+    log.info(f"watching {SIGNAL_FILE} (profile={PROFILE})")
+    log.info(f"mode={read_mode()}, cooldown={COOLDOWN_SECONDS}s, poll={POLL_SECONDS}s")
     if PROACTIVE_REFRESH_MINUTES > 0:
-        print(f"[sso-watcher] proactive refresh: {PROACTIVE_REFRESH_MINUTES}min before expiry", flush=True)
+        log.info(f"proactive refresh: {PROACTIVE_REFRESH_MINUTES}min before expiry")
 
     last_proactive_check: float = 0
     # Check token expiry every 60s (not every poll cycle)
@@ -1185,16 +1193,16 @@ def main() -> int:
                     and time.time() - last_proactive_check >= proactive_check_interval):
                 last_proactive_check = time.time()
                 if check_token_near_expiry(PROFILE, PROACTIVE_REFRESH_MINUTES):
-                    print(f"[sso-watcher] proactive: token near expiry, attempting silent refresh", flush=True)
+                    log.info(f"proactive: token near expiry, attempting silent refresh")
                     if try_silent_refresh(PROFILE):
-                        print("[sso-watcher] proactive: token refreshed successfully", flush=True)
+                        log.info("proactive: token refreshed successfully")
                     else:
-                        print("[sso-watcher] proactive: silent refresh failed, waiting for signal", flush=True)
+                        log.info("proactive: silent refresh failed, waiting for signal")
 
             if should_trigger_login():
                 if not try_acquire_lock():
                     # Another watcher instance is handling it
-                    print("[sso-watcher] lock held by another instance", flush=True)
+                    log.info("lock held by another instance")
                     time.sleep(POLL_SECONDS)
                     continue
 
@@ -1208,23 +1216,23 @@ def main() -> int:
                     if result == "success":
                         write_last_run(time.time())
                         clear_signal()
-                        print("[sso-watcher] login successful, signal cleared", flush=True)
+                        log.info("login successful, signal cleared")
                     elif result.startswith("snooze:"):
                         try:
                             seconds = int(result.split(":")[1])
                         except (ValueError, IndexError):
-                            print(f"[sso-watcher] bad snooze value: {result}, using {DEFAULT_SNOOZE_SECONDS}s", flush=True)
+                            log.info(f"bad snooze value: {result}, using {DEFAULT_SNOOZE_SECONDS}s")
                             seconds = DEFAULT_SNOOZE_SECONDS
                         update_signal_snooze(seconds)
-                        print(f"[sso-watcher] snoozed, next attempt in {seconds}s", flush=True)
+                        log.info(f"snoozed, next attempt in {seconds}s")
                     elif result == "suppress":
                         write_last_run(time.time())
                         clear_signal()
-                        print("[sso-watcher] reminders suppressed, signal cleared", flush=True)
+                        log.info("reminders suppressed, signal cleared")
                     elif result == "dismiss":
                         # User saw dialog but dismissed — cooldown to avoid popup spam
                         write_last_run(time.time())
-                        print("[sso-watcher] dismissed, retry after cooldown", flush=True)
+                        log.info("dismissed, retry after cooldown")
                     elif result == "failed":
                         # Login may have timed out but auth could have succeeded
                         # (e.g. post-sleep: webview completed but aws CLI hung).
@@ -1232,12 +1240,12 @@ def main() -> int:
                         if _check_credentials_valid(profile):
                             write_last_run(time.time())
                             clear_signal()
-                            print("[sso-watcher] login reported failed but credentials valid, signal cleared", flush=True)
+                            log.info("login reported failed but credentials valid, signal cleared")
                         else:
-                            print(f"[sso-watcher] login failed, will retry in {AUTO_RETRY_SNOOZE_SECONDS}s", flush=True)
+                            log.info(f"login failed, will retry in {AUTO_RETRY_SNOOZE_SECONDS}s")
                             update_signal_snooze(AUTO_RETRY_SNOOZE_SECONDS)
                     else:
-                        print(f"[sso-watcher] unexpected result: {result}", flush=True)
+                        log.info(f"unexpected result: {result}")
 
                 finally:
                     release_lock()
@@ -1245,11 +1253,11 @@ def main() -> int:
             time.sleep(POLL_SECONDS)
 
         except KeyboardInterrupt:
-            print("[sso-watcher] exiting", flush=True)
+            log.info("exiting")
             return 0
         except Exception as e:
             # Don't crash the launchd loop; log and continue
-            print(f"[sso-watcher] error: {e}", file=sys.stderr, flush=True)
+            log.error(f"error: {e}")
             time.sleep(POLL_SECONDS)
 
 
