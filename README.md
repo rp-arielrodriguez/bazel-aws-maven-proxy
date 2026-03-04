@@ -155,6 +155,7 @@ mise run sso-mode:silent      # Switch to silent (token refresh only)
 mise run sso-mode:standalone  # Switch to standalone (manual only)
 mise run sso-restart          # Restart watcher
 mise run sso-clean            # Clear state/signals/cooldown
+mise run sso-clean:cookies    # Clear webview cookies (forces full re-auth)
 ```
 
 ### Watcher Modes
@@ -224,6 +225,7 @@ aws sso login --profile bazel-cache  # Manual fallback
 mise run sso-status           # Check running/mode/credentials
 mise run sso-logs             # View recent logs
 mise run sso-clean            # Clear stuck state/signals/cooldown
+mise run sso-clean:cookies    # Clear webview cookies if login keeps failing
 ```
 
 ### S3 access

@@ -255,3 +255,18 @@ echo "✓ Removed cooldown"
 echo ""
 echo "State cleaned"
 """
+
+[tasks."sso-clean:cookies"]
+description = "Clear webview cached cookies (forces full re-auth on next login)"
+run = """
+set -euo pipefail
+WEBVIEW_BIN="$HOME/.aws/sso-renewer/bin/SSOLogin.app/Contents/MacOS/sso-webview"
+
+if [ ! -x "$WEBVIEW_BIN" ]; then
+  echo "✗ Webview not installed (run: mise run sso-install)"
+  exit 1
+fi
+
+"$WEBVIEW_BIN" --clear-cookies
+echo "✓ Webview cookies cleared — next login will require full IdP auth"
+"""

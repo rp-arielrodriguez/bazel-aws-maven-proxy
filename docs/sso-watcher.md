@@ -117,6 +117,7 @@ mise run sso-mode:silent      # Switch to silent (token refresh only)
 mise run sso-mode:standalone  # Switch to standalone (manual only)
 mise run sso-restart          # Restart watcher
 mise run sso-clean            # Clear state/signals/cooldown
+mise run sso-clean:cookies    # Clear webview cookies (forces full re-auth)
 ```
 
 ## Configuration
@@ -174,6 +175,7 @@ When browser login is needed (notify/auto modes), the watcher opens a dedicated 
 - Persistent cookie storage (Google/IdP credentials cached across launches)
 - OAuth callback detection (signals parent process on completion)
 - Portal redirect detection — auto-retries authorize URL if OIDC errors and redirects to AWS SSO portal
+- Auto-retry on WebKit "Frame load interrupted" (error 102, max 2 retries, 0.5s delay)
 
 **Flow:**
 1. `aws sso login --no-browser` → gets OIDC authorize URL (~0.5s)
@@ -185,6 +187,8 @@ When browser login is needed (notify/auto modes), the watcher opens a dedicated 
 **Portal redirect recovery:** If the OIDC flow errors (stale Google token, expired state) and AWS redirects to the SSO portal (`*.awsapps.com/start`) instead of the callback, the webview detects this and auto-retries the authorize URL once. This handles the common case of cached Google credentials causing a silent OIDC failure.
 
 **First login:** The webview starts with no cached state, so the first login requires full IdP credentials (email, password, MFA). These are cached in the webview's persistent cookie store — subsequent logins skip straight to MFA or auto-complete entirely, depending on IdP session policy. The cache persists across webview launches until the IdP session expires (controlled by your identity provider, typically hours to days).
+
+**Clear cookies:** Run `mise run sso-clean:cookies` to wipe the webview's persistent cookie storage. This forces a full re-auth on the next login — useful if cached IdP credentials are causing OIDC failures.
 
 **Fallback:** If the webview binary is missing (e.g. `swiftc` unavailable), falls back to `open <url>` which opens the system browser.
 
@@ -254,6 +258,7 @@ mise run sso-uninstall && mise run sso-install  # Reinstall
 
 ```bash
 mise run sso-clean                    # Clear state, signals, and cooldown
+mise run sso-clean:cookies            # Clear webview cookies if login keeps failing
 mise run containers:logs              # Check monitor is running
 ```
 

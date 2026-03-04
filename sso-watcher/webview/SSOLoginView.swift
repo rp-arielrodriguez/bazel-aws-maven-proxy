@@ -1,6 +1,6 @@
 // SSO Login Webview — sandboxed browser for AWS SSO authentication.
 //
-// Two modes:
+// Modes:
 //   Direct:  sso-webview <authorize-url> <callback-host:port>
 //            Opens the auth URL immediately in a WKWebView.
 //
@@ -8,6 +8,9 @@
 //            Shows a notification page (Refresh/Snooze/Don't Remind).
 //            On Refresh: signals SSO_ACTION:refresh, shows spinner,
 //            reads authorize URL from stdin, navigates to it.
+//
+//   Clear:   sso-webview --clear-cookies
+//            Clears all cached cookies/data and exits. No window shown.
 //
 // Persistent cookie storage (Google/IdP credentials cached across launches).
 // Detects OAuth callback redirect and signals parent via stdout.
@@ -73,15 +76,18 @@ private let snoozeOptions: [(label: String, seconds: Int)] = [
 
 /// Monitors webview navigation to detect the OAuth callback redirect.
 /// Also detects redirect to AWS SSO portal (OIDC error) and auto-retries.
+/// Handles "Frame load interrupted" (WebKit error 102) by auto-retrying.
 final class SSONavigationDelegate: NSObject, WKNavigationDelegate {
     private let callbackPattern: String
     private let onCallbackDetected: () -> Void
     private var callbackFired = false
 
-    /// Original authorize URL — set by the app delegate so we can retry on portal redirect.
+    /// Original authorize URL — set by the app delegate so we can retry on errors/portal redirect.
     var authorizeURL: URL?
     private var portalRetryCount = 0
     private let maxPortalRetries = 1
+    private var frameLoadRetryCount = 0
+    private let maxFrameLoadRetries = 2
 
     init(callbackPattern: String, onCallbackDetected: @escaping () -> Void) {
         self.callbackPattern = callbackPattern
@@ -149,7 +155,20 @@ final class SSONavigationDelegate: NSObject, WKNavigationDelegate {
             }
         }
 
+        // Suppress benign cancellations
         guard nsError.code != NSURLErrorCancelled else { return }
+
+        // "Frame load interrupted" (WebKit error 102) happens during rapid OIDC
+        // redirect chains. Auto-retry the authorize URL instead of showing error.
+        let isFrameLoadInterrupted = nsError.domain == "WebKitErrorDomain" && nsError.code == 102
+        if isFrameLoadInterrupted, let retryURL = authorizeURL, frameLoadRetryCount < maxFrameLoadRetries {
+            frameLoadRetryCount += 1
+            fputs("[sso-webview] frame load interrupted, retrying authorize URL (attempt \(frameLoadRetryCount))\n", stderr)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                webView.load(URLRequest(url: retryURL))
+            }
+            return
+        }
 
         let escapedMessage = escapeHTML(error.localizedDescription)
         let retryURL = escapeHTML(webView.url?.absoluteString ?? "")
@@ -742,7 +761,32 @@ func parseArguments() -> LaunchConfig? {
     return LaunchConfig(mode: .direct(url), callbackHost: callbackHost)
 }
 
+// MARK: - Clear cookies
+
+func clearCookies() {
+    let app = NSApplication.shared
+    app.setActivationPolicy(.prohibited)
+
+    let dataStore = WKWebsiteDataStore.default()
+    let allTypes = WKWebsiteDataStore.allWebsiteDataTypes()
+    let epoch = Date(timeIntervalSince1970: 0)
+
+    let semaphore = DispatchSemaphore(value: 0)
+    dataStore.removeData(ofTypes: allTypes, modifiedSince: epoch) {
+        semaphore.signal()
+    }
+    _ = semaphore.wait(timeout: .now() + 10)
+
+    print("SSO_COOKIES_CLEARED")
+    fflush(stdout)
+}
+
 // MARK: - Entry point
+
+if CommandLine.arguments.count >= 2 && CommandLine.arguments[1] == "--clear-cookies" {
+    clearCookies()
+    exit(ExitCode.success.rawValue)
+}
 
 guard let config = parseArguments() else {
     exit(ExitCode.error.rawValue)

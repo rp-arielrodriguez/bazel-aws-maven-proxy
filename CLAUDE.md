@@ -46,6 +46,7 @@ mise run sso-mode:silent      # Switch to silent (token refresh only)
 mise run sso-mode:standalone  # Switch to standalone (manual only)
 mise run sso-restart          # Restart watcher
 mise run sso-clean            # Clear state/signals/cooldown
+mise run sso-clean:cookies    # Clear webview cookies (forces full re-auth)
 ```
 
 ### Configuration
@@ -112,6 +113,8 @@ Environment variables in `.env` (copy from `.env.example`):
   - WKWebView with persistent cookie storage (Google/IdP creds cached)
   - OAuth callback detection via `WKNavigationDelegate`, auto-close on auth
   - Portal redirect detection — auto-retries authorize URL if OIDC errors to `*.awsapps.com/start`
+  - Auto-retry on WebKit "Frame load interrupted" (error 102, max 2 retries)
+  - `--clear-cookies` mode to wipe persistent cookie storage
   - Launched via `open -a` for launchd compatibility
   - Falls back to system browser if `swiftc` unavailable
 - **Bundle**: Built to `~/.aws/sso-renewer/bin/SSOLogin.app/` by `mise run sso-install`
