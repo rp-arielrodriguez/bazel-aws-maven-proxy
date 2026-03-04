@@ -27,6 +27,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [sso-monitor] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
+    stream=sys.stdout,
 )
 logger = logging.getLogger("sso-monitor")
 

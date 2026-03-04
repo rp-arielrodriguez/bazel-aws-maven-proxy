@@ -47,6 +47,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [sso-watcher] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
+    stream=sys.stdout,
 )
 log = logging.getLogger("sso-watcher")
 
