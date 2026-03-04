@@ -173,6 +173,7 @@ When browser login is needed (notify/auto modes), the watcher opens a dedicated 
 - No browser tab pollution (dedicated window, auto-closes on auth)
 - Persistent cookie storage (Google/IdP credentials cached across launches)
 - OAuth callback detection (signals parent process on completion)
+- Portal redirect detection — auto-retries authorize URL if OIDC errors and redirects to AWS SSO portal
 
 **Flow:**
 1. `aws sso login --no-browser` → gets OIDC authorize URL (~0.5s)
@@ -180,6 +181,8 @@ When browser login is needed (notify/auto modes), the watcher opens a dedicated 
 3. User completes auth in webview
 4. OAuth callback redirects to localhost → webview detects, signals, exits
 5. `aws sso login` receives callback, writes new token
+
+**Portal redirect recovery:** If the OIDC flow errors (stale Google token, expired state) and AWS redirects to the SSO portal (`*.awsapps.com/start`) instead of the callback, the webview detects this and auto-retries the authorize URL once. This handles the common case of cached Google credentials causing a silent OIDC failure.
 
 **First login:** The webview starts with no cached state, so the first login requires full IdP credentials (email, password, MFA). These are cached in the webview's persistent cookie store — subsequent logins skip straight to MFA or auto-complete entirely, depending on IdP session policy. The cache persists across webview launches until the IdP session expires (controlled by your identity provider, typically hours to days).
 

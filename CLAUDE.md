@@ -111,6 +111,7 @@ Environment variables in `.env` (copy from `.env.example`):
 - **Key functionality**:
   - WKWebView with persistent cookie storage (Google/IdP creds cached)
   - OAuth callback detection via `WKNavigationDelegate`, auto-close on auth
+  - Portal redirect detection — auto-retries authorize URL if OIDC errors to `*.awsapps.com/start`
   - Launched via `open -a` for launchd compatibility
   - Falls back to system browser if `swiftc` unavailable
 - **Bundle**: Built to `~/.aws/sso-renewer/bin/SSOLogin.app/` by `mise run sso-install`

@@ -72,10 +72,16 @@ private let snoozeOptions: [(label: String, seconds: Int)] = [
 // MARK: - Navigation Delegate
 
 /// Monitors webview navigation to detect the OAuth callback redirect.
+/// Also detects redirect to AWS SSO portal (OIDC error) and auto-retries.
 final class SSONavigationDelegate: NSObject, WKNavigationDelegate {
     private let callbackPattern: String
     private let onCallbackDetected: () -> Void
     private var callbackFired = false
+
+    /// Original authorize URL — set by the app delegate so we can retry on portal redirect.
+    var authorizeURL: URL?
+    private var portalRetryCount = 0
+    private let maxPortalRetries = 1
 
     init(callbackPattern: String, onCallbackDetected: @escaping () -> Void) {
         self.callbackPattern = callbackPattern
@@ -97,6 +103,19 @@ final class SSONavigationDelegate: NSObject, WKNavigationDelegate {
             callbackFired = true
             decisionHandler(.allow)
             onCallbackDetected()
+            return
+        }
+
+        // Detect redirect to AWS SSO portal — means OIDC flow errored.
+        // Auto-retry the authorize URL once.
+        if !callbackFired && isPortalURL(url) && portalRetryCount < maxPortalRetries,
+           let retryURL = authorizeURL {
+            portalRetryCount += 1
+            fputs("[sso-webview] OIDC redirected to portal, retrying authorize URL (attempt \(portalRetryCount))\n", stderr)
+            decisionHandler(.cancel)
+            DispatchQueue.main.async {
+                webView.load(URLRequest(url: retryURL))
+            }
             return
         }
 
@@ -157,6 +176,15 @@ final class SSONavigationDelegate: NSObject, WKNavigationDelegate {
         if hostPort == alt { return true }
         let alt2 = callbackPattern.replacingOccurrences(of: "localhost", with: "127.0.0.1")
         return hostPort == alt2
+    }
+
+    /// Detect AWS SSO portal URL — indicates OIDC flow errored and redirected
+    /// to the account/role picker instead of back to the callback.
+    /// Pattern: https://d-xxxxxx.awsapps.com/start (with optional /start/#/ suffix)
+    private func isPortalURL(_ url: URL) -> Bool {
+        guard let host = url.host else { return false }
+        let path = url.path
+        return host.hasSuffix(".awsapps.com") && (path == "/start" || path.hasPrefix("/start/"))
     }
 
     private func failingURL(from error: Error) -> URL? {
@@ -648,6 +676,7 @@ final class SSOAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     // MARK: - Auth navigation
 
     private func navigateToAuth(url: URL) {
+        navigationDelegate?.authorizeURL = url
         webView?.load(URLRequest(url: url))
     }
 
