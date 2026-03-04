@@ -310,11 +310,11 @@ def scenario_docker_fallback():
     print(f"\n  {BOLD}Exit code: {rc}{RESET}")
 
 
-def scenario_no_swiftc():
+def scenario_no_swiftc_decline():
     """swiftc missing — user declines install, continues with browser fallback."""
     scenario_banner(
-        "No swiftc (Xcode CLT)",
-        "All required tools present but swiftc missing → user declines → browser fallback"
+        "No swiftc — user declines",
+        "swiftc missing → prompted to install → says no → browser fallback"
     )
 
     tools = {"mise": "", "aws": "", "podman": ""}  # no swiftc
@@ -326,6 +326,32 @@ def scenario_no_swiftc():
         prompts=["default", "us-west-2", "test-bucket", "8888", "notify"],
         confirms=[True],
         three_way=["no"],  # decline xcode-select --install
+        env={"TERM_PROGRAM": "Terminal"},
+    )
+
+    rc = run_setup(ctx)
+    print(f"\n  {BOLD}Exit code: {rc}{RESET}")
+
+
+def scenario_no_swiftc_accept():
+    """swiftc missing — user accepts install, xcode-select runs."""
+    scenario_banner(
+        "No swiftc — user installs",
+        "swiftc missing → prompted to install → says yes → xcode-select --install runs"
+    )
+
+    tools = {"mise": "", "aws": "", "podman": ""}  # no swiftc
+    commands = {
+        **_base_commands_all(),
+        ("xcode-select", "--install"): CmdResult(0),
+    }
+
+    ctx = ReplayContext(
+        tools=tools,
+        commands=commands,
+        prompts=["default", "us-west-2", "test-bucket", "8888", "notify"],
+        confirms=[True],
+        three_way=["yes"],  # accept xcode-select --install
         env={"TERM_PROGRAM": "Terminal"},
     )
 
@@ -659,7 +685,8 @@ SCENARIOS = {
     "3": ("AWS CLI Too Old (2.7)", scenario_aws_too_old),
     "4": ("No Container Engine", scenario_no_container_engine),
     "5": ("Docker Fallback (no podman)", scenario_docker_fallback),
-    "6": ("No swiftc (user declines install)", scenario_no_swiftc),
+    "6": ("No swiftc — user declines", scenario_no_swiftc_decline),
+    "6b": ("No swiftc — user installs", scenario_no_swiftc_accept),
     "7": ("Keep Existing .env", scenario_existing_env_keep),
     "8": ("SSO Not Configured + Fails", scenario_sso_not_configured),
     "9": ("SSO Not Configured + Skip", scenario_sso_skip),
@@ -703,7 +730,7 @@ def main():
     print()
 
     try:
-        choice = input(f"  Pick scenario (1-18 or 'all'): ").strip()
+        choice = input(f"  Pick scenario (or 'all'): ").strip()
     except (EOFError, KeyboardInterrupt):
         return
 
