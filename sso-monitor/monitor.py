@@ -5,6 +5,7 @@ SSO credential monitor for container deployment.
 Periodically checks if AWS SSO credentials are valid.
 Writes signal file when credentials expire for host-side watcher to pick up.
 """
+import logging
 import os
 import sys
 import json
@@ -21,6 +22,9 @@ from botocore.exceptions import (
     TokenRetrievalError,
     CredentialRetrievalError
 )
+
+logging.basicConfig(level=logging.INFO, format="[sso-monitor] %(message)s")
+logger = logging.getLogger("sso-monitor")
 
 # Configuration from environment
 AWS_PROFILE = os.environ.get('AWS_PROFILE', 'default')
@@ -52,11 +56,11 @@ def check_credentials(session=None) -> bool:
         error_code = e.response.get('Error', {}).get('Code', '')
         if error_code in ['ExpiredToken', 'ExpiredTokenException', 'InvalidToken']:
             return False
-        print(f"[sso-monitor] Warning: AWS API error: {error_code}", flush=True)
+        logger.warning("AWS API error: %s", error_code)
         return False
 
     except Exception as e:
-        print(f"[sso-monitor] Warning: Error checking credentials: {e}", flush=True)
+        logger.warning("Error checking credentials: %s", e)
         return False
 
 
@@ -88,27 +92,27 @@ def write_signal_file(reason: str = "Credentials expired"):
                 pass
             raise
 
-        print(f"[sso-monitor] ✗ Credentials invalid - wrote signal: {SIGNAL_FILE}", flush=True)
+        logger.error("Credentials invalid — wrote signal: %s", SIGNAL_FILE)
 
     except Exception as e:
-        print(f"[sso-monitor] Error writing signal file: {e}", file=sys.stderr, flush=True)
+        logger.error("Error writing signal file: %s", e)
 
 
 def clear_signal_file():
     """Remove signal file when credentials are valid."""
     try:
         SIGNAL_FILE.unlink(missing_ok=True)
-        print(f"[sso-monitor] ✓ Credentials valid - cleared signal", flush=True)
+        logger.info("Credentials valid — cleared signal")
     except Exception:
         pass
 
 
 def main():
     """Main monitoring loop."""
-    print(f"[sso-monitor] Starting credential monitor", flush=True)
-    print(f"[sso-monitor] Profile: {AWS_PROFILE}", flush=True)
-    print(f"[sso-monitor] Check interval: {CHECK_INTERVAL}s", flush=True)
-    print(f"[sso-monitor] Signal file: {SIGNAL_FILE}", flush=True)
+    logger.info("Starting credential monitor")
+    logger.info("Profile: %s", AWS_PROFILE)
+    logger.info("Check interval: %ds", CHECK_INTERVAL)
+    logger.info("Signal file: %s", SIGNAL_FILE)
     # Handle SIGTERM from docker stop
     _signal.signal(_signal.SIGTERM, lambda *_: sys.exit(0))
 
@@ -124,10 +128,10 @@ def main():
             # Only log state changes
             if credentials_valid != last_state:
                 if credentials_valid:
-                    print(f"[sso-monitor] ✓ Credentials valid", flush=True)
+                    logger.info("Credentials valid")
                     clear_signal_file()
                 else:
-                    print(f"[sso-monitor] ✗ Credentials invalid", flush=True)
+                    logger.error("Credentials invalid")
                     write_signal_file()
 
                 last_state = credentials_valid
@@ -135,10 +139,10 @@ def main():
             time.sleep(CHECK_INTERVAL)
 
         except KeyboardInterrupt:
-            print("[sso-monitor] Exiting", flush=True)
+            logger.info("Exiting")
             break
         except Exception as e:
-            print(f"[sso-monitor] Error in monitoring loop: {e}", file=sys.stderr, flush=True)
+            logger.error("Error in monitoring loop: %s", e)
             last_state = None  # force re-evaluation on recovery
             time.sleep(CHECK_INTERVAL)
 

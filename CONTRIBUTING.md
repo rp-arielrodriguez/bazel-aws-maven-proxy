@@ -8,6 +8,7 @@ Contributions welcome. This is a focused tool — keep changes simple and aligne
 # Clone and install dependencies
 git clone https://github.com/rp-arielrodriguez/bazel-aws-maven-proxy.git
 cd bazel-aws-maven-proxy
+mise install              # Install toolchain (Python 3.11, etc.)
 pip install -r tests/requirements.txt
 
 # Run tests

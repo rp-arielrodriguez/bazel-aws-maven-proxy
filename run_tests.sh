@@ -1,4 +1,5 @@
 #!/bin/bash
+# Legacy test runner — prefer 'python3 -m pytest -v' or mise tasks
 # Test runner script for bazel-aws-maven-proxy
 # This script makes it easy to run different test configurations
 

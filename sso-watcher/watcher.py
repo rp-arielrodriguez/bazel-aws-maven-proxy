@@ -44,6 +44,12 @@ from urllib.parse import urlparse, parse_qs
 
 VALID_MODES = ("notify", "auto", "silent", "standalone")
 
+# Named constants for magic numbers
+AUTO_RETRY_SNOOZE_SECONDS = 30
+DEFAULT_SNOOZE_SECONDS = 900
+WEBVIEW_CLOSE_GRACE_SECONDS = 10
+CRED_CHECK_INTERVAL_SECONDS = 15
+
 # ---- Configuration (override via environment) ----
 PROFILE = os.environ.get("AWS_PROFILE", "default")
 SIGNAL_FILE = Path(os.environ.get(
@@ -726,7 +732,6 @@ def run_aws_sso_login(profile: str | None = None) -> int:
         # Poll aws process, also watch for webview exit (user closed window)
         deadline = time.time() + SSO_LOGIN_TIMEOUT
         last_cred_check = 0
-        cred_check_interval = 15  # seconds between credential checks
         while True:
             rc = proc.poll()
             if rc is not None:
@@ -741,7 +746,7 @@ def run_aws_sso_login(profile: str | None = None) -> int:
             if webview_proc is not None and not _is_webview_running():
                 print("[sso-watcher] webview closed, waiting for aws to finish...", flush=True)
                 try:
-                    proc.wait(timeout=10)
+                    proc.wait(timeout=WEBVIEW_CLOSE_GRACE_SECONDS)
                     output = proc.stdout.read() if proc.stdout else ""
                     if output.strip():
                         print(output.strip(), flush=True)
@@ -756,7 +761,7 @@ def run_aws_sso_login(profile: str | None = None) -> int:
             # This handles post-sleep scenarios where the CLI stalls on
             # token exchange but auth actually succeeded (webview shows portal).
             now = time.time()
-            if now - last_cred_check >= cred_check_interval:
+            if now - last_cred_check >= CRED_CHECK_INTERVAL_SECONDS:
                 last_cred_check = now
                 if _check_credentials_valid(profile):
                     print("[sso-watcher] credentials valid (detected during wait), killing stale aws process", flush=True)
@@ -1022,7 +1027,6 @@ def _run_notify_login(profile: str) -> str:
         # Now poll aws process for completion, same as run_aws_sso_login
         deadline = time.time() + SSO_LOGIN_TIMEOUT
         last_cred_check = 0
-        cred_check_interval = 15
         while True:
             rc = aws_proc.poll()
             if rc is not None:
@@ -1035,7 +1039,7 @@ def _run_notify_login(profile: str) -> str:
             if webview.poll() is not None:
                 print("[sso-watcher] webview closed during auth", flush=True)
                 try:
-                    aws_proc.wait(timeout=10)
+                    aws_proc.wait(timeout=WEBVIEW_CLOSE_GRACE_SECONDS)
                     return "success" if aws_proc.returncode == 0 else "failed"
                 except subprocess.TimeoutExpired:
                     aws_proc.kill()
@@ -1044,7 +1048,7 @@ def _run_notify_login(profile: str) -> str:
 
             # Secondary exit: credentials became valid
             now = time.time()
-            if now - last_cred_check >= cred_check_interval:
+            if now - last_cred_check >= CRED_CHECK_INTERVAL_SECONDS:
                 last_cred_check = now
                 if _check_credentials_valid(profile):
                     print("[sso-watcher] credentials valid during wait, killing stale aws process", flush=True)
@@ -1209,8 +1213,8 @@ def main() -> int:
                         try:
                             seconds = int(result.split(":")[1])
                         except (ValueError, IndexError):
-                            print(f"[sso-watcher] bad snooze value: {result}, using 900s", flush=True)
-                            seconds = 900
+                            print(f"[sso-watcher] bad snooze value: {result}, using {DEFAULT_SNOOZE_SECONDS}s", flush=True)
+                            seconds = DEFAULT_SNOOZE_SECONDS
                         update_signal_snooze(seconds)
                         print(f"[sso-watcher] snoozed, next attempt in {seconds}s", flush=True)
                     elif result == "suppress":
@@ -1230,8 +1234,8 @@ def main() -> int:
                             clear_signal()
                             print("[sso-watcher] login reported failed but credentials valid, signal cleared", flush=True)
                         else:
-                            print("[sso-watcher] login failed, will retry in 30s", flush=True)
-                            update_signal_snooze(30)
+                            print(f"[sso-watcher] login failed, will retry in {AUTO_RETRY_SNOOZE_SECONDS}s", flush=True)
+                            update_signal_snooze(AUTO_RETRY_SNOOZE_SECONDS)
                     else:
                         print(f"[sso-watcher] unexpected result: {result}", flush=True)
 
