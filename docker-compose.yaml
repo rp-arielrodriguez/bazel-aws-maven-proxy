@@ -7,6 +7,7 @@ services:
     environment:
       - AWS_PROFILE=${AWS_PROFILE:-default}
       - AWS_REGION=${AWS_REGION:-us-west-2}
+      - AWS_CONFIG_FILE=/root/.aws/config
       - S3_BUCKET_NAME=${S3_BUCKET_NAME}
       - PROXY_PORT=${PROXY_PORT:-8888}
       - LOG_LEVEL=${LOG_LEVEL:-info}
@@ -37,6 +38,7 @@ services:
     container_name: bazel-sso-monitor
     environment:
       - AWS_PROFILE=${AWS_PROFILE:-default}
+      - AWS_CONFIG_FILE=/root/.aws/config
       - CHECK_INTERVAL=${CHECK_INTERVAL:-60}
       - SIGNAL_FILE=/signals/login-required.json
     volumes:
