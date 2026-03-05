@@ -22,6 +22,5 @@ RUN useradd --create-home --system appuser
 USER appuser
 ENV HOME=/home/appuser
 
-# AWS config and cache will be mounted here
-VOLUME ["/home/appuser/.aws"]
+# Run monitor
 CMD ["python", "-u", "monitor.py"]

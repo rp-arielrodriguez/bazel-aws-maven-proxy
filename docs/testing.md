@@ -24,7 +24,7 @@ tests/
 
 ## Test Coverage
 
-**378 passing tests** (22 s3proxy + 211 watcher + 52 monitor + 93 setup)
+**385 passing tests** (22 s3proxy + 211 watcher + 52 monitor + 100 setup)
 
 ### S3 Proxy Tests (`tests/unit/test_s3proxy.py`)
 
@@ -235,14 +235,17 @@ Uses `MockSetupContext` — subclass of `SetupContext` with in-memory filesystem
 **AWS Profiles — `TestListAwsProfiles`** (4 tests):
 - Multiple profiles, no config file, empty, default-section only
 
-**Env Config Prompts — `TestPromptEnvConfig`** (4 tests):
+**Env Config Prompts — `TestPromptEnvConfig`** (6 tests):
 - Defaults, custom values, invalid SSO mode, profiles shown
+- TLS skip default false, TLS skip enabled
 
-**Env Content Generation — `TestGenerateEnvContent`** (4 tests):
+**Env Content Generation — `TestGenerateEnvContent`** (6 tests):
 - Default config, custom, hardcoded values, commented engine
+- TLS skip false commented, TLS skip true uncommented
 
-**Parse Existing Env — `TestParseExistingEnv`** (5 tests):
+**Parse Existing Env — `TestParseExistingEnv`** (8 tests):
 - All fields, quoted values, comments, missing file, partial
+- TLS skip true/false/missing
 
 **Configure Env — `TestConfigureEnv`** (3 tests):
 - Fresh install, keep existing, overwrite
