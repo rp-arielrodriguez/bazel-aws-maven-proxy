@@ -1,5 +1,14 @@
 FROM python:3.11-slim
 
+# Set to true when behind a corporate proxy that intercepts HTTPS with custom certificates.
+# Disables TLS verification for curl (AWS CLI download) and pip (PyPI packages).
+ARG SKIP_TLS_VERIFY=false
+RUN if [ "$SKIP_TLS_VERIFY" = "true" ]; then \
+    echo "insecure" > /root/.curlrc && \
+    printf '[global]\ntrusted-host =\n\tpypi.org\n\tfiles.pythonhosted.org\n\tpypi.python.org\n' \
+        > /etc/pip.conf; \
+fi
+
 # Install AWS CLI v2 (multi-arch: x86_64 + aarch64)
 RUN apt-get update && apt-get install -y \
     curl \
@@ -34,8 +43,8 @@ COPY app.py .
 # Create data directory for caching
 RUN mkdir -p /data
 
-# Run as non-root user
-RUN useradd --no-create-home --system appuser && chown appuser:appuser /data
+# Run as non-root user with home directory for AWS config
+RUN useradd --create-home --system appuser && chown appuser:appuser /data
 USER appuser
 
 # Set environment variables

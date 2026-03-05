@@ -3,11 +3,12 @@ services:
     build:
       context: ./s3proxy
       dockerfile: Dockerfile
+      args:
+        SKIP_TLS_VERIFY: ${SKIP_TLS_VERIFY:-false}
     container_name: bazel-s3-proxy
     environment:
       - AWS_PROFILE=${AWS_PROFILE:-default}
       - AWS_REGION=${AWS_REGION:-us-west-2}
-      - AWS_CONFIG_FILE=/root/.aws/config
       - S3_BUCKET_NAME=${S3_BUCKET_NAME}
       - PROXY_PORT=${PROXY_PORT:-8888}
       - LOG_LEVEL=${LOG_LEVEL:-info}
@@ -15,8 +16,8 @@ services:
     ports:
       - "${PROXY_PORT:-8888}:${PROXY_PORT:-8888}"
     volumes:
-      - ${HOME}/.aws/config:/root/.aws/config:rw
-      - ${HOME}/.aws/sso/cache:/root/.aws/sso/cache
+      - ${HOME}/.aws/config:/home/appuser/.aws/config:ro
+      - ${HOME}/.aws/sso/cache:/home/appuser/.aws/sso/cache
       - maven-cache:/data
     restart: unless-stopped
     healthcheck:
@@ -35,15 +36,16 @@ services:
     build:
       context: ./sso-monitor
       dockerfile: Dockerfile
+      args:
+        SKIP_TLS_VERIFY: ${SKIP_TLS_VERIFY:-false}
     container_name: bazel-sso-monitor
     environment:
       - AWS_PROFILE=${AWS_PROFILE:-default}
-      - AWS_CONFIG_FILE=/root/.aws/config
       - CHECK_INTERVAL=${CHECK_INTERVAL:-60}
       - SIGNAL_FILE=/signals/login-required.json
     volumes:
-      - ${HOME}/.aws/config:/root/.aws/config:rw
-      - ${HOME}/.aws/sso/cache:/root/.aws/sso/cache
+      - ${HOME}/.aws/config:/home/appuser/.aws/config:ro
+      - ${HOME}/.aws/sso/cache:/home/appuser/.aws/sso/cache
       - ${HOME}/.aws/sso-renewer:/signals
     restart: unless-stopped
     healthcheck:

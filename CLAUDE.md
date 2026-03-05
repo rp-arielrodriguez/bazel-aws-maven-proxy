@@ -51,6 +51,13 @@ mise run sso-clean:cookies    # Clear webview cookies (forces full re-auth)
 
 ### Configuration
 
+```bash
+mise run config                          # Show current .env values
+mise run config:set KEY=VALUE            # Update any .env setting post-install
+mise run tls-skip:enable                 # Enable TLS skip (corporate proxy)
+mise run tls-skip:disable                # Disable TLS skip
+```
+
 Environment variables in `.env` (copy from `.env.example`):
 - `AWS_PROFILE`: AWS CLI profile (default: default)
 - `AWS_REGION`: AWS region for S3
@@ -64,6 +71,7 @@ Environment variables in `.env` (copy from `.env.example`):
 - `SSO_LOGIN_MODE`: Login behavior - `notify` (default, dialog), `auto` (webview immediately), `silent` (token refresh only, no webview/browser), `standalone` (manual only). Toggleable at runtime via `mise run sso-mode:*`
 - `SSO_PROACTIVE_REFRESH_MINUTES`: Refresh token N min before expiry, 0 to disable (default: 30)
 - `CONTAINER_ENGINE`: `podman` or `docker` (auto-detect if unset, prefers podman)
+- `SKIP_TLS_VERIFY`: `true` to skip TLS cert verification for container pulls (podman only). Use when behind a corporate proxy that replaces HTTPS certificates. Toggleable via `mise run tls-skip:enable/disable`
 
 ## Architecture
 

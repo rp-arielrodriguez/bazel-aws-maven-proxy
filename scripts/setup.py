@@ -60,6 +60,7 @@ class EnvConfig:
     s3_bucket: str = "your-maven-bucket"
     proxy_port: str = "8888"
     sso_mode: str = "notify"
+    skip_tls_verify: bool = False
 
 
 @dataclass
@@ -354,11 +355,26 @@ def prompt_env_config(ctx: SetupContext) -> EnvConfig:
         ctx.warn(f"Invalid mode '{config.sso_mode}', defaulting to 'notify'")
         config.sso_mode = "notify"
 
+    ctx.print("")
+    ctx.print("  Corporate proxy / TLS:")
+    ctx.print("    If your network proxy intercepts HTTPS and replaces certificates,")
+    ctx.print("    container image pulls may fail with x509 certificate errors.")
+    ctx.print("    Enabling this sets --tls-verify=false for podman.")
+    config.skip_tls_verify = ctx.confirm(
+        "Skip TLS verification for container pulls? (corporate proxy with custom certs)",
+        default=False,
+    )
+
     return config
 
 
 def generate_env_content(config: EnvConfig) -> str:
     """Generate .env file content from config."""
+    skip_tls_line = (
+        "SKIP_TLS_VERIFY=true"
+        if config.skip_tls_verify
+        else "# SKIP_TLS_VERIFY=false"
+    )
     return f"""\
 # AWS Configuration
 AWS_PROFILE="{config.aws_profile}"
@@ -383,6 +399,11 @@ SSO_PROACTIVE_REFRESH_MINUTES=30
 
 # Container Engine (auto-detect if unset)
 # CONTAINER_ENGINE=podman
+
+# Corporate Proxy / TLS
+# Set to true if behind a proxy that intercepts HTTPS and replaces certificates.
+# Enables --tls-verify=false for podman. For Docker, configure daemon-level CA trust.
+{skip_tls_line}
 """
 
 
@@ -441,6 +462,8 @@ def parse_existing_env(ctx: SetupContext, path: Path) -> EnvConfig:
             config.proxy_port = val
         elif key == "SSO_LOGIN_MODE":
             config.sso_mode = val
+        elif key == "SKIP_TLS_VERIFY":
+            config.skip_tls_verify = val.lower() in ("true", "1", "yes")
 
     return config
 

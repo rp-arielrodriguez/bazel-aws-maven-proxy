@@ -256,6 +256,118 @@ echo ""
 echo "State cleaned"
 """
 
+[tasks.config]
+description = "Show current configuration from .env"
+run = """
+set -euo pipefail
+if [ ! -f .env ]; then
+  echo "No .env found. Run: mise run setup"
+  exit 1
+fi
+echo "Current configuration (.env):"
+echo ""
+while IFS= read -r line; do
+  [[ "$line" =~ ^[[:space:]]*$ ]] && continue
+  printf "  %s\n" "$line"
+done < .env
+"""
+
+[tasks."config:set"]
+description = "Update a .env value (e.g.: mise run config:set PROXY_PORT=9000)"
+run = """
+set -euo pipefail
+ASSIGNMENT="{{arg(name='assignment')}}"
+KEY="${ASSIGNMENT%%=*}"
+VALUE="${ASSIGNMENT#*=}"
+
+if [ -z "$KEY" ] || [ "$KEY" = "$ASSIGNMENT" ]; then
+  echo "Usage: mise run config:set KEY=VALUE"
+  exit 1
+fi
+if [ ! -f .env ]; then
+  echo "No .env found. Run: mise run setup"
+  exit 1
+fi
+
+if grep -qE "^#?[[:space:]]*${KEY}=" .env; then
+  sed -i.bak "s|^#*[[:space:]]*${KEY}=.*|${KEY}=${VALUE}|" .env && rm -f .env.bak
+else
+  printf '\n%s=%s\n' "$KEY" "$VALUE" >> .env
+fi
+echo "✓ Set ${KEY}=${VALUE}"
+
+case "$KEY" in
+  PROXY_PORT|S3_BUCKET_NAME|AWS_PROFILE|AWS_REGION|LOG_LEVEL|REFRESH_INTERVAL|CHECK_INTERVAL|SKIP_TLS_VERIFY|CONTAINER_ENGINE)
+    echo "  Restart containers to apply: mise run containers:restart"
+    ;;
+  SSO_COOLDOWN_SECONDS|SSO_POLL_SECONDS|SSO_PROACTIVE_REFRESH_MINUTES|SSO_LOGIN_TIMEOUT)
+    echo "  Restart SSO watcher to apply: mise run sso-restart"
+    ;;
+  SSO_LOGIN_MODE)
+    echo "  Tip: toggle SSO mode live with: mise run sso-mode:notify|auto|silent|standalone"
+    ;;
+esac
+"""
+
+[tasks."tls-skip:enable"]
+description = "Enable TLS skip for container pulls (corporate proxy with custom certs)"
+run = """
+set -euo pipefail
+if [ ! -f .env ]; then
+  echo "No .env found. Run: mise run setup"
+  exit 1
+fi
+if grep -qE "^#?[[:space:]]*SKIP_TLS_VERIFY=" .env; then
+  sed -i.bak "s|^#*[[:space:]]*SKIP_TLS_VERIFY=.*|SKIP_TLS_VERIFY=true|" .env && rm -f .env.bak
+else
+  printf '\nSKIP_TLS_VERIFY=true\n' >> .env
+fi
+echo "✓ TLS skip enabled (SKIP_TLS_VERIFY=true)"
+
+# On macOS, podman runs in a VM. Registry operations happen inside the VM,
+# so CONTAINERS_REGISTRIES_CONF set on the host has no effect.
+# We must configure the VM's registries directly.
+if command -v podman &>/dev/null && podman machine ssh "true" 2>/dev/null; then
+  podman machine ssh "sudo mkdir -p /etc/containers/registries.conf.d && \
+    printf '[[registry]]\nlocation = \"docker.io\"\ninsecure = true\n' | \
+    sudo tee /etc/containers/registries.conf.d/skip-tls.conf > /dev/null"
+  echo "✓ Configured podman machine VM (docker.io insecure=true)"
+  echo "  Restarting podman machine to apply registry config..."
+  MACHINE=$(podman machine list --format "{{.Name}}" --noheading 2>/dev/null | head -1)
+  podman machine stop "$MACHINE"
+  podman machine start "$MACHINE"
+  echo "✓ Podman machine restarted"
+fi
+echo "  Start containers with: mise run containers:up"
+"""
+
+[tasks."tls-skip:disable"]
+description = "Disable TLS skip for container pulls"
+run = """
+set -euo pipefail
+if [ ! -f .env ]; then
+  echo "No .env found. Run: mise run setup"
+  exit 1
+fi
+if grep -qE "^#?[[:space:]]*SKIP_TLS_VERIFY=" .env; then
+  sed -i.bak "s|^#*[[:space:]]*SKIP_TLS_VERIFY=.*|SKIP_TLS_VERIFY=false|" .env && rm -f .env.bak
+else
+  printf '\nSKIP_TLS_VERIFY=false\n' >> .env
+fi
+echo "✓ TLS skip disabled (SKIP_TLS_VERIFY=false)"
+
+if command -v podman &>/dev/null && podman machine ssh "true" 2>/dev/null; then
+  podman machine ssh "sudo rm -f /etc/containers/registries.conf.d/skip-tls.conf"
+  echo "✓ Removed TLS skip config from podman machine VM"
+  echo "  Restarting podman machine to apply registry config..."
+  MACHINE=$(podman machine list --format "{{.Name}}" --noheading 2>/dev/null | head -1)
+  podman machine stop "$MACHINE"
+  podman machine start "$MACHINE"
+  echo "✓ Podman machine restarted"
+fi
+echo "  Start containers with: mise run containers:up"
+"""
+
 [tasks."sso-clean:cookies"]
 description = "Clear webview cached cookies (forces full re-auth on next login)"
 run = """

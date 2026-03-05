@@ -53,4 +53,18 @@ _detect_compose() {
 
 COMPOSE_CMD=$(_detect_compose)
 
+# When behind a corporate HTTPS proxy that replaces certificates, skip TLS verification.
+# Set SKIP_TLS_VERIFY=true in .env to enable. Podman only — Docker requires daemon-level config.
+#
+# Uses CONTAINERS_REGISTRIES_CONF (not PODMAN_ARGS) because --tls-verify is a per-subcommand
+# flag in podman, not a global one. CONTAINERS_REGISTRIES_CONF applies at the library level
+# and covers all registry operations: pulls, builds, and compose image resolution.
+if [[ "${SKIP_TLS_VERIFY:-false}" == "true" ]]; then
+  if [[ "$ENGINE" == "podman" ]]; then
+    _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    export CONTAINERS_REGISTRIES_CONF="$_SCRIPT_DIR/registries-skip-tls.conf"
+    unset _SCRIPT_DIR
+  fi
+fi
+
 export ENGINE COMPOSE_CMD
