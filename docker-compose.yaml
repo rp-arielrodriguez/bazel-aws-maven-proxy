@@ -15,7 +15,7 @@ services:
     ports:
       - "${PROXY_PORT:-8888}:${PROXY_PORT:-8888}"
     volumes:
-      - ${HOME}/.aws/config:/root/.aws/config:ro
+      - ${HOME}/.aws/config:/root/.aws/config:rw
       - ${HOME}/.aws/sso/cache:/root/.aws/sso/cache
       - maven-cache:/data
     restart: unless-stopped
@@ -42,7 +42,7 @@ services:
       - CHECK_INTERVAL=${CHECK_INTERVAL:-60}
       - SIGNAL_FILE=/signals/login-required.json
     volumes:
-      - ${HOME}/.aws/config:/root/.aws/config:ro
+      - ${HOME}/.aws/config:/root/.aws/config:rw
       - ${HOME}/.aws/sso/cache:/root/.aws/sso/cache
       - ${HOME}/.aws/sso-renewer:/signals
     restart: unless-stopped
