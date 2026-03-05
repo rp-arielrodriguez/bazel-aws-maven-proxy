@@ -20,6 +20,7 @@ COPY monitor.py .
 # Run as non-root user with home directory for AWS config
 RUN useradd --create-home --system appuser
 USER appuser
+ENV HOME=/home/appuser
 
 # AWS config and cache will be mounted here
 VOLUME ["/home/appuser/.aws"]

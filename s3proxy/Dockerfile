@@ -46,6 +46,7 @@ RUN mkdir -p /data
 # Run as non-root user with home directory for AWS config
 RUN useradd --create-home --system appuser && chown appuser:appuser /data
 USER appuser
+ENV HOME=/home/appuser
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
