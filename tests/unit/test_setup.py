@@ -418,6 +418,19 @@ class TestPromptEnvConfig:
         assert "foo" in out
         assert "bar" in out
 
+    def test_skip_tls_verify_default_false(self):
+        ctx = MockSetupContext(prompts=["", "", "", "", ""])
+        config = prompt_env_config(ctx)
+        assert config.skip_tls_verify is False
+
+    def test_skip_tls_verify_enabled(self):
+        ctx = MockSetupContext(
+            prompts=["", "", "", "", ""],
+            confirms=[True],
+        )
+        config = prompt_env_config(ctx)
+        assert config.skip_tls_verify is True
+
 
 # ===================================================================
 # TestGenerateEnvContent
@@ -456,6 +469,16 @@ class TestGenerateEnvContent:
     def test_container_engine_commented(self):
         content = generate_env_content(EnvConfig())
         assert "# CONTAINER_ENGINE=podman" in content
+
+    def test_skip_tls_verify_false_is_commented(self):
+        content = generate_env_content(EnvConfig())
+        assert "# SKIP_TLS_VERIFY=false" in content
+        assert "SKIP_TLS_VERIFY=true" not in content
+
+    def test_skip_tls_verify_true_is_uncommented(self):
+        content = generate_env_content(EnvConfig(skip_tls_verify=True))
+        assert "SKIP_TLS_VERIFY=true" in content
+        assert "# SKIP_TLS_VERIFY=false" not in content
 
 
 # ===================================================================
@@ -515,6 +538,27 @@ class TestParseExistingEnv:
         assert cfg.aws_profile == "custom"
         assert cfg.aws_region == "us-west-2"  # default
         assert cfg.s3_bucket == "your-maven-bucket"  # default
+
+    def test_skip_tls_verify_true(self):
+        env_content = 'SKIP_TLS_VERIFY=true\n'
+        env_path = Path("/fake/.env")
+        ctx = MockSetupContext(files={str(env_path): env_content})
+        cfg = parse_existing_env(ctx, env_path)
+        assert cfg.skip_tls_verify is True
+
+    def test_skip_tls_verify_false(self):
+        env_content = 'SKIP_TLS_VERIFY=false\n'
+        env_path = Path("/fake/.env")
+        ctx = MockSetupContext(files={str(env_path): env_content})
+        cfg = parse_existing_env(ctx, env_path)
+        assert cfg.skip_tls_verify is False
+
+    def test_skip_tls_verify_missing_defaults_false(self):
+        env_content = 'AWS_PROFILE="dev"\n'
+        env_path = Path("/fake/.env")
+        ctx = MockSetupContext(files={str(env_path): env_content})
+        cfg = parse_existing_env(ctx, env_path)
+        assert cfg.skip_tls_verify is False
 
 
 # ===================================================================

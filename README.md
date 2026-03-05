@@ -57,6 +57,7 @@ mise run setup
 This interactive wizard will:
 - Verify prerequisites (aws, podman/docker, swiftc)
 - Prompt for AWS profile, region, S3 bucket, and create `.env`
+- Ask whether you're behind a corporate proxy that intercepts HTTPS (sets `SKIP_TLS_VERIFY`)
 - Run `aws configure sso` if your profile isn't configured yet (creates a new one)
 - Install Python via mise
 - Build the login webview and install the SSO watcher (launchd)
@@ -138,6 +139,19 @@ mise run containers:logs    # View container logs
 
 Supports Podman (preferred) and Docker. Auto-detected, or set `CONTAINER_ENGINE` in `.env`.
 
+### Configuration
+
+View and modify `.env` settings after installation:
+
+```bash
+mise run config                          # Show current configuration
+mise run config:set KEY=VALUE            # Update any setting (e.g. PROXY_PORT=9000)
+mise run tls-skip:enable                 # Enable TLS skip (corporate proxy)
+mise run tls-skip:disable                # Disable TLS skip
+```
+
+`config:set` will remind you which service needs restarting after each change.
+
 ### SSO Watcher (macOS)
 
 ```bash
@@ -201,6 +215,7 @@ Environment variables in `.env`:
 | `SSO_LOGIN_MODE` | `notify`, `auto`, `silent`, or `standalone` | `notify` |
 | `SSO_PROACTIVE_REFRESH_MINUTES` | Refresh token N min before expiry (0=disable) | `30` |
 | `CONTAINER_ENGINE` | `podman` or `docker` | auto-detect |
+| `SKIP_TLS_VERIFY` | Skip TLS cert verification for container pulls (podman only) — set to `true` when behind a corporate proxy that replaces HTTPS certificates | `false` |
 
 ## Troubleshooting
 
@@ -233,6 +248,30 @@ mise run sso-clean:cookies    # Clear webview cookies if login keeps failing
 ```bash
 aws s3 ls s3://your-bucket/ --profile bazel-cache
 ```
+
+### Corporate proxy / TLS certificate errors
+
+If you see an error like:
+```
+x509: certificate signed by unknown authority
+tls: failed to verify certificate
+```
+
+Your network proxy is intercepting HTTPS and replacing certificates. Enable TLS skip for podman:
+
+```bash
+mise run tls-skip:enable
+mise run containers:restart
+```
+
+Or set it during initial setup when the wizard asks about corporate proxies. To configure manually:
+
+```bash
+mise run config:set SKIP_TLS_VERIFY=true
+mise run containers:restart
+```
+
+> **Docker users:** `SKIP_TLS_VERIFY` only applies to Podman. For Docker, add the corporate CA certificate via Docker Desktop → Settings → Docker Engine, or mount it into `/etc/docker/certs.d/registry-1.docker.io/`.
 
 ## Documentation
 

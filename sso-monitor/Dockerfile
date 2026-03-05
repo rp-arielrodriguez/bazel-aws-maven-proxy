@@ -1,5 +1,13 @@
 FROM python:3.11-slim
 
+# Set to true when behind a corporate proxy that intercepts HTTPS with custom certificates.
+# Disables TLS verification for pip (PyPI packages).
+ARG SKIP_TLS_VERIFY=false
+RUN if [ "$SKIP_TLS_VERIFY" = "true" ]; then \
+    printf '[global]\ntrusted-host =\n\tpypi.org\n\tfiles.pythonhosted.org\n\tpypi.python.org\n' \
+        > /etc/pip.conf; \
+fi
+
 WORKDIR /app
 
 # Install dependencies
