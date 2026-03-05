@@ -17,9 +17,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy monitor script
 COPY monitor.py .
 
-# Run as non-root user
-RUN useradd --no-create-home --system appuser
+# Run as non-root user with home directory for AWS config
+RUN useradd --create-home --system appuser
 USER appuser
 
-# Run monitor
+# AWS config and cache will be mounted here
+VOLUME ["/home/appuser/.aws"]
 CMD ["python", "-u", "monitor.py"]

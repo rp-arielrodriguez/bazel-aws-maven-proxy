@@ -43,8 +43,8 @@ COPY app.py .
 # Create data directory for caching
 RUN mkdir -p /data
 
-# Run as non-root user
-RUN useradd --no-create-home --system appuser && chown appuser:appuser /data
+# Run as non-root user with home directory for AWS config
+RUN useradd --create-home --system appuser && chown appuser:appuser /data
 USER appuser
 
 # Set environment variables
