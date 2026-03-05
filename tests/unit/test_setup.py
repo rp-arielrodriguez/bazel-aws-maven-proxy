@@ -897,6 +897,16 @@ class TestCheckSsoConfiguration:
 # ===================================================================
 
 class TestConfigureSso:
+
+    def _not_configured(self):
+        """Commands that indicate profile has no SSO config."""
+        return {
+            ("aws", "configure", "get", "sso_session", "--profile", "dev"):
+                CmdResult(1),
+            ("aws", "configure", "get", "sso_account_id", "--profile", "dev"):
+                CmdResult(1),
+        }
+
     def test_already_configured_modern(self):
         ctx = MockSetupContext(commands={
             ("aws", "configure", "get", "sso_session", "--profile", "dev"):
@@ -917,58 +927,135 @@ class TestConfigureSso:
         out = output_text(ctx)
         assert "legacy" in out
 
-    def test_not_configured_user_says_yes(self):
+    def test_not_configured_user_says_yes_writes_config(self):
+        home = str(Path.home())
+        config_path = f"{home}/.aws/config"
         ctx = MockSetupContext(
-            commands={
-                ("aws", "configure", "get", "sso_session", "--profile", "dev"):
-                    CmdResult(1),
-                ("aws", "configure", "get", "sso_account_id", "--profile", "dev"):
-                    CmdResult(1),
-                ("aws", "configure", "sso", "--profile", "dev"):
-                    CmdResult(0),
-            },
+            commands=self._not_configured(),
             three_way=["yes"],
+            prompts=[
+                "https://myorg.awsapps.com/start",
+                "us-east-1",
+                "123456789012",
+                "MyRole",
+            ],
+            files={config_path: ""},
         )
         assert configure_sso(ctx, "dev") is True
+        content = ctx._files[config_path]
+        assert "[profile dev]" in content
+        assert "sso_account_id = 123456789012" in content
+        assert "sso_role_name = MyRole" in content
+        assert "sso_session = dev" in content
+        assert "[sso-session dev]" in content
+        assert "sso_start_url = https://myorg.awsapps.com/start" in content
+        assert "sso_region = us-east-1" in content
+        assert "sso_registration_scopes = sso:account:access" in content
 
     def test_not_configured_user_says_no(self):
         ctx = MockSetupContext(
-            commands={
-                ("aws", "configure", "get", "sso_session", "--profile", "dev"):
-                    CmdResult(1),
-                ("aws", "configure", "get", "sso_account_id", "--profile", "dev"):
-                    CmdResult(1),
-            },
+            commands=self._not_configured(),
             three_way=["no"],
         )
         assert configure_sso(ctx, "dev") is False
 
     def test_not_configured_user_says_skip(self):
         ctx = MockSetupContext(
-            commands={
-                ("aws", "configure", "get", "sso_session", "--profile", "dev"):
-                    CmdResult(1),
-                ("aws", "configure", "get", "sso_account_id", "--profile", "dev"):
-                    CmdResult(1),
-            },
+            commands=self._not_configured(),
             three_way=["skip"],
         )
         assert configure_sso(ctx, "dev") is False
 
-    def test_configure_sso_fails(self):
+    def test_missing_account_id_returns_false(self):
         ctx = MockSetupContext(
-            commands={
-                ("aws", "configure", "get", "sso_session", "--profile", "dev"):
-                    CmdResult(1),
-                ("aws", "configure", "get", "sso_account_id", "--profile", "dev"):
-                    CmdResult(1),
-                ("aws", "configure", "sso", "--profile", "dev"):
-                    CmdResult(1, "", "error"),
-            },
+            commands=self._not_configured(),
             three_way=["yes"],
+            prompts=[
+                "https://myorg.awsapps.com/start",
+                "us-east-1",
+                "",   # empty account ID
+                "MyRole",
+            ],
         )
         assert configure_sso(ctx, "dev") is False
-        assert any("failed" in m.lower() for m in ctx.get_output())
+        out = output_text(ctx)
+        assert "account id" in out.lower()
+
+    def test_missing_role_name_returns_false(self):
+        ctx = MockSetupContext(
+            commands=self._not_configured(),
+            three_way=["yes"],
+            prompts=[
+                "https://myorg.awsapps.com/start",
+                "us-east-1",
+                "123456789012",
+                "",   # empty role name
+            ],
+        )
+        assert configure_sso(ctx, "dev") is False
+        out = output_text(ctx)
+        assert "role name" in out.lower()
+
+    def test_appends_to_existing_config(self):
+        home = str(Path.home())
+        config_path = f"{home}/.aws/config"
+        existing = "[profile other]\nregion = us-west-2\n"
+        ctx = MockSetupContext(
+            commands=self._not_configured(),
+            three_way=["yes"],
+            prompts=[
+                "https://myorg.awsapps.com/start",
+                "us-east-1",
+                "123456789012",
+                "MyRole",
+            ],
+            files={config_path: existing},
+        )
+        assert configure_sso(ctx, "dev") is True
+        content = ctx._files[config_path]
+        # Old content preserved
+        assert "[profile other]" in content
+        # New content appended
+        assert "[profile dev]" in content
+        assert "[sso-session dev]" in content
+
+    def test_duplicate_profile_not_overwritten(self):
+        home = str(Path.home())
+        config_path = f"{home}/.aws/config"
+        existing = "[profile dev]\nsso_account_id = old\n"
+        ctx = MockSetupContext(
+            commands=self._not_configured(),
+            three_way=["yes"],
+            prompts=[
+                "https://myorg.awsapps.com/start",
+                "us-east-1",
+                "123456789012",
+                "MyRole",
+            ],
+            files={config_path: existing},
+        )
+        assert configure_sso(ctx, "dev") is False
+        out = output_text(ctx)
+        assert "already exists" in out.lower()
+
+    def test_creates_config_file_if_missing(self):
+        home = str(Path.home())
+        config_path = f"{home}/.aws/config"
+        ctx = MockSetupContext(
+            commands=self._not_configured(),
+            three_way=["yes"],
+            prompts=[
+                "https://myorg.awsapps.com/start",
+                "us-east-1",
+                "123456789012",
+                "MyRole",
+            ],
+            # no files — config doesn't exist
+        )
+        assert configure_sso(ctx, "dev") is True
+        content = ctx._files[config_path]
+        assert "[profile dev]" in content
+        assert "sso_registration_scopes = sso:account:access" in content
 
 
 # ===================================================================

@@ -266,7 +266,7 @@ flowchart TB
         s1{SSO configured?}
         s1 -->|modern/legacy| s2[OK]
         s1 -->|no| s3{Configure now?}
-        s3 -->|yes| s4[aws configure sso]
+        s3 -->|yes| s4[Prompt SSO details + write config]
         s3 -->|no/skip| s5[Skip]
     end
 
@@ -310,6 +310,6 @@ Most phases after prerequisites use **warn-and-continue** — failures produce w
 | 3. mise install | Command fails | Warn, continue |
 | 4. sso-install | Build/load fails | Warn, continue |
 | 5. Permissions | Denied / timeout (60s) | **Exit 1** — watcher can't function |
-| 6. SSO config | aws configure sso fails | Warn, continue |
+| 6. SSO config | Missing required field / duplicate profile | Warn, continue |
 | 7. Login | Login fails / S3 inaccessible | Warn, continue |
 | 8. Containers | compose up fails | Warn, continue |

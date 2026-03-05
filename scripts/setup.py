@@ -599,8 +599,70 @@ def check_sso_configuration(ctx: SetupContext, profile: str) -> SsoCheckResult:
     return SsoCheckResult(False, "none")
 
 
+def _read_aws_config(ctx: SetupContext) -> str:
+    """Read ~/.aws/config content, return empty string if missing."""
+    config_path = Path.home() / ".aws" / "config"
+    if not ctx.file_exists(config_path):
+        return ""
+    try:
+        return ctx.read_file(config_path)
+    except (OSError, PermissionError):
+        return ""
+
+
+def _write_sso_config(
+    ctx: SetupContext,
+    profile: str,
+    session_name: str,
+    start_url: str,
+    sso_region: str,
+    account_id: str,
+    role_name: str,
+) -> bool:
+    """Append SSO profile + session to ~/.aws/config.
+
+    Writes modern sso-session style config with sso_registration_scopes.
+    Returns True on success.
+    """
+    config_path = Path.home() / ".aws" / "config"
+
+    existing = _read_aws_config(ctx)
+
+    # Check for existing sections to avoid duplicates
+    if re.search(rf"^\[profile\s+{re.escape(profile)}\]", existing, re.MULTILINE):
+        ctx.warn(f"Profile '{profile}' already exists in config — not overwriting")
+        return False
+    if re.search(rf"^\[sso-session\s+{re.escape(session_name)}\]", existing, re.MULTILINE):
+        ctx.warn(f"Session '{session_name}' already exists in config — not overwriting")
+        return False
+
+    # Build new sections
+    new_sections = f"""
+[profile {profile}]
+sso_account_id = {account_id}
+sso_role_name = {role_name}
+sso_session = {session_name}
+
+[sso-session {session_name}]
+sso_start_url = {start_url}
+sso_region = {sso_region}
+sso_registration_scopes = sso:account:access
+"""
+
+    # Ensure existing content ends with newline
+    if existing and not existing.endswith("\n"):
+        existing += "\n"
+
+    ctx.write_file(config_path, existing + new_sections)
+    return True
+
+
 def configure_sso(ctx: SetupContext, profile: str) -> bool:
-    """Phase 6: Check SSO config, optionally run aws configure sso.
+    """Phase 6: Check SSO config, optionally configure it.
+
+    Uses our own prompts instead of `aws configure sso` to avoid its poor
+    interactive experience (no backspace, no editing, auth-code confusion).
+    Writes directly to ~/.aws/config with modern sso-session style.
 
     Returns True if SSO is configured (pre-existing or newly configured).
     """
@@ -625,25 +687,38 @@ def configure_sso(ctx: SetupContext, profile: str) -> bool:
         ctx.print("")
         return False
     if answer == "no":
-        ctx.print("  Skipping. Run 'aws configure sso' before starting services.")
+        ctx.print("  Skipping. Run setup again to configure later.")
         ctx.print("")
         return False
 
-    # Run interactive SSO wizard
+    # Prompt for SSO values
     ctx.print("")
-    ctx.print("  When prompted for 'SSO registration scopes', press Enter to accept")
-    ctx.print("  the default (sso:account:access) — this enables token refresh.")
+    ctx.print("  Enter your AWS SSO details (ask your admin if unsure):")
     ctx.print("")
 
-    r = ctx.run_cmd(
-        ["aws", "configure", "sso", "--profile", profile],
-        interactive=True, timeout=300
-    )
-    if r.ok:
+    start_url = ctx.prompt("SSO start URL", "https://your-org.awsapps.com/start")
+    sso_region = ctx.prompt("SSO region", "us-east-1")
+    account_id = ctx.prompt("AWS account ID", "")
+    role_name = ctx.prompt("SSO role name", "")
+
+    # Validate required fields
+    if not account_id:
+        ctx.warn("Account ID is required")
+        ctx.print("")
+        return False
+    if not role_name:
+        ctx.warn("Role name is required")
+        ctx.print("")
+        return False
+
+    session_name = profile  # session name matches profile for simplicity
+
+    if _write_sso_config(ctx, profile, session_name, start_url, sso_region, account_id, role_name):
+        ctx.ok(f"Wrote SSO config for profile '{profile}'")
+        ctx.ok("sso_registration_scopes = sso:account:access (token refresh enabled)")
         ctx.print("")
         return True
 
-    ctx.warn("aws configure sso failed — run 'aws configure sso' manually")
     ctx.print("")
     return False
 

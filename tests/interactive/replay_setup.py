@@ -396,10 +396,10 @@ SSO_LOGIN_MODE="auto"
 
 
 def scenario_sso_not_configured():
-    """Profile has no SSO config, user says configure, but it fails."""
+    """Profile has no SSO config, user says configure, provides empty account ID."""
     scenario_banner(
-        "SSO Not Configured + Configure Fails",
-        "Profile has no SSO, user says yes to configure, aws configure sso fails"
+        "SSO Not Configured + Missing Account ID",
+        "Profile has no SSO, user says yes to configure, but leaves account ID empty"
     )
 
     commands = {
@@ -408,16 +408,16 @@ def scenario_sso_not_configured():
             CmdResult(1, "", "not set"),
         ("aws", "configure", "get", "sso_account_id", "--profile", "default"):
             CmdResult(1, "", "not set"),
-        ("aws", "configure", "sso", "--profile", "default"):
-            CmdResult(1, "", "Configuration failed"),
     }
 
     ctx = ReplayContext(
         tools=_base_tools_all(),
         commands=commands,
-        prompts=["default", "us-west-2", "my-bucket", "8888", "notify"],
+        # env prompts + SSO prompts (start_url, region, account_id="", role)
+        prompts=["default", "us-west-2", "my-bucket", "8888", "notify",
+                 "https://myorg.awsapps.com/start", "us-east-1", "", "MyRole"],
         three_way=["yes"],  # yes to configure SSO
-        confirms=[True],    # start containers
+        confirms=[False, True],  # skip TLS, start containers
         env={"TERM_PROGRAM": "Terminal"},
     )
 

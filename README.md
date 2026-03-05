@@ -58,12 +58,12 @@ This interactive wizard will:
 - Verify prerequisites (aws, podman/docker, swiftc)
 - Prompt for AWS profile, region, S3 bucket, and create `.env`
 - Ask whether you're behind a corporate proxy that intercepts HTTPS (sets `SKIP_TLS_VERIFY`)
-- Run `aws configure sso` if your profile isn't configured yet (creates a new one)
+- Configure SSO if your profile isn't set up yet (prompts for start URL, region, account, role)
 - Install Python via mise
 - Build the login webview and install the SSO watcher (launchd)
 - Optionally start containers
 
-> **Profile note:** `AWS_PROFILE` in `.env` must match a profile name in `~/.aws/config` with SSO configured. If you already have a profile with access to the S3 bucket, enter that name during setup. If not, the setup wizard will run `aws configure sso` to create one — the profile name you choose there must match what goes in `.env`. All components (proxy, monitor, watcher) read this single value.
+> **Profile note:** `AWS_PROFILE` in `.env` must match a profile name in `~/.aws/config` with SSO configured. If you already have a profile with access to the S3 bucket, enter that name during setup. If not, the setup wizard will prompt for SSO details and write the config directly (with `sso_registration_scopes` for token refresh). All components (proxy, monitor, watcher) read this single value.
 
 <details>
 <summary>Manual setup (alternative)</summary>
@@ -279,13 +279,13 @@ mise run containers:restart
 |----------|-------------|
 | [docs/sso-watcher.md](docs/sso-watcher.md) | SSO watcher architecture and internals |
 | [docs/state-machine.md](docs/state-machine.md) | State diagrams (Mermaid) for modes, signals, cooldown |
-| [docs/testing.md](docs/testing.md) | Test structure and coverage (385 tests) |
+| [docs/testing.md](docs/testing.md) | Test structure and coverage (389 tests) |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute |
 
 ## Testing
 
 ```bash
-pytest              # Run all 385 tests
+pytest              # Run all 389 tests
 ./run_tests.sh      # Helper script
 ```
 

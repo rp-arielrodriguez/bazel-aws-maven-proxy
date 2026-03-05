@@ -24,7 +24,7 @@ tests/
 
 ## Test Coverage
 
-**385 passing tests** (22 s3proxy + 211 watcher + 52 monitor + 100 setup)
+**389 passing tests** (22 s3proxy + 211 watcher + 52 monitor + 104 setup)
 
 ### S3 Proxy Tests (`tests/unit/test_s3proxy.py`)
 
@@ -265,8 +265,11 @@ Uses `MockSetupContext` — subclass of `SetupContext` with in-memory filesystem
 **SSO Configuration Check — `TestCheckSsoConfiguration`** (4 tests):
 - Modern sso_session, legacy, none, empty output
 
-**Configure SSO — `TestConfigureSso`** (6 tests):
-- Already configured (modern/legacy), user yes/no/skip, failure
+**Configure SSO — `TestConfigureSso`** (10 tests):
+- Already configured (modern/legacy), user yes/no/skip
+- Writes config with all fields + registration_scopes, appends to existing
+- Missing account ID/role name rejected, duplicate profile not overwritten
+- Creates config file if missing
 
 **Credentials Valid — `TestCheckCredentialsValid`** (2 tests):
 - Valid, invalid
