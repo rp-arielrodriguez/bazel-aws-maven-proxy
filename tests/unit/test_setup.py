@@ -1100,6 +1100,37 @@ class TestConfigureSso:
         content = ctx._files[config_path]
         assert "dev-setup-tmp" not in content
 
+    def test_stale_oidc_registrations_cleared(self):
+        """Stale OIDC client registrations cleared, token files preserved."""
+        import json as _json
+        home = str(Path.home())
+        config_path = f"{home}/.aws/config"
+        cache_path, cache_content = self._cache_file()
+        # Stale client registration (no accessToken)
+        stale_path = f"{home}/.aws/sso/cache/stale-client.json"
+        stale_content = _json.dumps({
+            "clientId": "old-id", "clientSecret": "old-secret",
+            "expiresAt": "2099-01-01T00:00:00Z",
+        })
+        accounts = [{"accountId": "111", "accountName": "acc"}]
+        roles = [{"roleName": "Role", "accountId": "111"}]
+        ctx = MockSetupContext(
+            commands=self._discover_commands(accounts=accounts, roles=roles),
+            three_way=["yes"],
+            prompts=["https://myorg.awsapps.com/start", "us-east-1"],
+            choices=[0],
+            files={
+                config_path: "",
+                cache_path: cache_content,
+                stale_path: stale_content,
+            },
+        )
+        configure_sso(ctx, "dev")
+        # Stale registration removed
+        assert stale_path in ctx._removed
+        # Token file preserved (not removed)
+        assert cache_path not in ctx._removed
+
 
 # ===================================================================
 # TestCheckCredentialsValid

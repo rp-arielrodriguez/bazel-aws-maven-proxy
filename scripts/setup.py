@@ -742,6 +742,28 @@ def _sso_list_roles(ctx: SetupContext, token: str, account_id: str, sso_region: 
         return []
 
 
+def _clear_sso_client_cache(ctx: SetupContext) -> None:
+    """Remove cached OIDC client registrations to force fresh PKCE registration.
+
+    Stale registrations from CLI < 2.22.0 use device-code grant type.
+    Clearing forces the new CLI to create a PKCE registration instead.
+    Only removes client registration files (clientId/clientSecret),
+    not access token files (accessToken/startUrl).
+    """
+    import json as _json
+    cache_dir = Path.home() / ".aws" / "sso" / "cache"
+    pattern = str(cache_dir / "*.json")
+    for path_str in ctx.glob_files(pattern):
+        try:
+            content = ctx.read_file(Path(path_str))
+            data = _json.loads(content)
+            # Client registrations have clientId but no accessToken
+            if "clientId" in data and "accessToken" not in data:
+                ctx.remove_file(Path(path_str))
+        except (OSError, _json.JSONDecodeError):
+            continue
+
+
 def _discover_account_and_role(
     ctx: SetupContext,
     profile: str,
@@ -750,8 +772,12 @@ def _discover_account_and_role(
 ) -> tuple[str, str]:
     """Login to SSO, list accounts/roles, let user pick.
 
+    Clears stale OIDC cache first to ensure PKCE flow (not device-code).
     Returns (account_id, role_name) or ("", "") on failure.
     """
+    # Clear stale OIDC client registrations (device-code → PKCE)
+    _clear_sso_client_cache(ctx)
+
     # Write temporary sso-session for login
     session_name = f"{profile}-setup-tmp"
     config_path = Path.home() / ".aws" / "config"
