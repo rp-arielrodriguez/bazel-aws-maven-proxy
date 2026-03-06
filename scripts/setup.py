@@ -143,7 +143,7 @@ class SetupContext:
         try:
             value = input(f"  {text} [{default}]: ")
             return value.strip() or default
-        except (EOFError, KeyboardInterrupt):
+        except EOFError:
             return default
 
     def confirm(self, text: str, default: bool = True) -> bool:
@@ -151,7 +151,7 @@ class SetupContext:
         suffix = "[Y/n]" if default else "[y/N]"
         try:
             value = input(f"  {text} {suffix}: ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
+        except EOFError:
             return default
         if not value:
             return default
@@ -161,7 +161,7 @@ class SetupContext:
         """Ask Y/n/s question. Returns 'yes', 'no', or 'skip'."""
         try:
             value = input(f"  {text} [Y/n/s(kip)]: ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
+        except EOFError:
             return "yes"
         if not value:
             return "yes"
@@ -177,7 +177,7 @@ class SetupContext:
             self.print(f"    {i}) {item}")
         try:
             value = input(f"  {label} [1]: ").strip()
-        except (EOFError, KeyboardInterrupt):
+        except EOFError:
             return 0
         if not value:
             return 0
@@ -705,13 +705,19 @@ def _find_sso_access_token(ctx: SetupContext, start_url: str) -> str:
     return best_token
 
 
-def _sso_list_accounts(ctx: SetupContext, token: str, sso_region: str) -> list[dict]:
-    """Call aws sso list-accounts, return list of {accountId, accountName}."""
+def _sso_list_accounts(ctx: SetupContext, token: str, sso_region: str,
+                       profile: str = "default") -> list[dict]:
+    """Call aws sso list-accounts, return list of {accountId, accountName}.
+
+    Explicit --profile avoids inheriting AWS_PROFILE from env (which may
+    point to a profile that doesn't exist yet during setup).
+    """
     import json as _json
     r = ctx.run_cmd([
         "aws", "sso", "list-accounts",
         "--access-token", token,
         "--region", sso_region,
+        "--profile", profile,
     ])
     if not r.ok:
         detail = (r.stderr or r.stdout or "").strip()
@@ -725,14 +731,19 @@ def _sso_list_accounts(ctx: SetupContext, token: str, sso_region: str) -> list[d
         return []
 
 
-def _sso_list_roles(ctx: SetupContext, token: str, account_id: str, sso_region: str) -> list[dict]:
-    """Call aws sso list-account-roles, return list of {roleName, accountId}."""
+def _sso_list_roles(ctx: SetupContext, token: str, account_id: str,
+                    sso_region: str, profile: str = "default") -> list[dict]:
+    """Call aws sso list-account-roles, return list of {roleName, accountId}.
+
+    Explicit --profile avoids inheriting AWS_PROFILE from env.
+    """
     import json as _json
     r = ctx.run_cmd([
         "aws", "sso", "list-account-roles",
         "--access-token", token,
         "--account-id", account_id,
         "--region", sso_region,
+        "--profile", profile,
     ])
     if not r.ok:
         detail = (r.stderr or r.stdout or "").strip()
@@ -794,66 +805,61 @@ sso_registration_scopes = sso:account:access
         existing += "\n"
     ctx.write_file(config_path, existing + tmp_section)
 
-    ctx.print("")
-    ctx.print("  Logging in to SSO to discover accounts and roles...")
-    ctx.print("  The sandboxed webview will open for authentication.")
-    ctx.print("")
+    try:
+        ctx.print("")
+        ctx.print("  Logging in to SSO to discover accounts and roles...")
+        ctx.print("  The sandboxed webview will open for authentication.")
+        ctx.print("")
 
-    if not do_sso_login(ctx, session_name):
-        ctx.warn("SSO login failed — falling back to manual entry")
-        # Clean up temp config
+        if not do_sso_login(ctx, session_name):
+            ctx.warn("SSO login failed — falling back to manual entry")
+            return ("", "")
+
+        # Find access token from cache
+        token = _find_sso_access_token(ctx, start_url)
+        if not token:
+            # Diagnostic: list cache files so user can report what's there
+            cache_dir = Path.home() / ".aws" / "sso" / "cache"
+            files = ctx.glob_files(str(cache_dir / "*.json"))
+            ctx.warn(f"Could not find SSO token after login (cache files: {len(files)})")
+            ctx.warn("Falling back to manual entry")
+            return ("", "")
+
+        # List accounts (use temp profile to avoid AWS_PROFILE env interference)
+        accounts = _sso_list_accounts(ctx, token, sso_region, profile=session_name)
+        if not accounts:
+            ctx.warn("No accounts found — falling back to manual entry")
+            return ("", "")
+
+        ctx.print("")
+        ctx.print("  Available accounts:")
+        account_labels = [
+            f"{a['accountName']} ({a['accountId']})" for a in accounts
+        ]
+        idx = ctx.choose(account_labels, "Select account")
+        account = accounts[idx]
+        account_id = account["accountId"]
+        ctx.ok(f"Account: {account['accountName']} ({account_id})")
+
+        # List roles
+        roles = _sso_list_roles(ctx, token, account_id, sso_region, profile=session_name)
+        if not roles:
+            ctx.warn("No roles found — falling back to manual entry")
+            return (account_id, "")
+
+        if len(roles) == 1:
+            role_name = roles[0]["roleName"]
+            ctx.ok(f"Role: {role_name} (only role available)")
+        else:
+            ctx.print("  Available roles:")
+            role_labels = [r["roleName"] for r in roles]
+            ridx = ctx.choose(role_labels, "Select role")
+            role_name = roles[ridx]["roleName"]
+            ctx.ok(f"Role: {role_name}")
+
+        return (account_id, role_name)
+    finally:
         _remove_temp_config(ctx, config_path, session_name)
-        return ("", "")
-
-    # Find access token from cache
-    token = _find_sso_access_token(ctx, start_url)
-    if not token:
-        # Diagnostic: list cache files so user can report what's there
-        cache_dir = Path.home() / ".aws" / "sso" / "cache"
-        files = ctx.glob_files(str(cache_dir / "*.json"))
-        ctx.warn(f"Could not find SSO token after login (cache files: {len(files)})")
-        ctx.warn("Falling back to manual entry")
-        _remove_temp_config(ctx, config_path, session_name)
-        return ("", "")
-
-    # List accounts
-    accounts = _sso_list_accounts(ctx, token, sso_region)
-    if not accounts:
-        ctx.warn("No accounts found — falling back to manual entry")
-        _remove_temp_config(ctx, config_path, session_name)
-        return ("", "")
-
-    ctx.print("")
-    ctx.print("  Available accounts:")
-    account_labels = [
-        f"{a['accountName']} ({a['accountId']})" for a in accounts
-    ]
-    idx = ctx.choose(account_labels, "Select account")
-    account = accounts[idx]
-    account_id = account["accountId"]
-    ctx.ok(f"Account: {account['accountName']} ({account_id})")
-
-    # List roles
-    roles = _sso_list_roles(ctx, token, account_id, sso_region)
-    if not roles:
-        ctx.warn("No roles found — falling back to manual entry")
-        _remove_temp_config(ctx, config_path, session_name)
-        return (account_id, "")
-
-    if len(roles) == 1:
-        role_name = roles[0]["roleName"]
-        ctx.ok(f"Role: {role_name} (only role available)")
-    else:
-        ctx.print("  Available roles:")
-        role_labels = [r["roleName"] for r in roles]
-        ridx = ctx.choose(role_labels, "Select role")
-        role_name = roles[ridx]["roleName"]
-        ctx.ok(f"Role: {role_name}")
-
-    # Clean up temp config
-    _remove_temp_config(ctx, config_path, session_name)
-
-    return (account_id, role_name)
 
 
 def _remove_temp_config(ctx: SetupContext, config_path: Path, session_name: str) -> None:
@@ -1142,8 +1148,12 @@ def run_setup(ctx: SetupContext) -> int:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    ctx = SetupContext()
-    sys.exit(run_setup(ctx))
+    try:
+        ctx = SetupContext()
+        sys.exit(run_setup(ctx))
+    except KeyboardInterrupt:
+        print(f"\n{YELLOW}Setup interrupted.{NC}")
+        sys.exit(130)
 
 
 if __name__ == "__main__":
