@@ -13,6 +13,25 @@ from pathlib import Path
 from typing import Optional
 
 
+def _ensure_rich() -> bool:
+    """Install Rich if missing. Returns True if available."""
+    try:
+        import rich  # noqa: F401
+        return True
+    except ImportError:
+        pass
+    import subprocess
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--quiet", "rich"],
+            capture_output=True, timeout=60,
+        )
+        import rich  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Result types
 # ---------------------------------------------------------------------------
@@ -72,7 +91,7 @@ class SsoCheckResult:
 
 
 # ---------------------------------------------------------------------------
-# ANSI helpers
+# ANSI fallbacks (used when Rich is unavailable)
 # ---------------------------------------------------------------------------
 BOLD = "\033[1m"
 GREEN = "\033[0;32m"
@@ -81,6 +100,9 @@ RED = "\033[0;31m"
 NC = "\033[0m"
 
 VALID_SSO_MODES = {"notify", "auto", "silent", "standalone"}
+
+# Rich availability flag — set by _ensure_rich() in main()
+_RICH_AVAILABLE = False
 
 MIN_AWS_MAJOR = 2
 MIN_AWS_MINOR = 9
@@ -101,6 +123,10 @@ class SetupContext:
     - file_exists / read_file / write_file / mkdir: filesystem ops
     - env: environment variables
     - repo_root: project root directory
+
+    When Rich is available, output uses styled markup and prompts
+    use Rich.Prompt for a modern CLI experience. Falls back to plain
+    ANSI when Rich is not installed.
     """
 
     def __init__(
@@ -111,6 +137,13 @@ class SetupContext:
         self.repo_root = repo_root or Path.cwd()
         self.env = env if env is not None else dict(os.environ)
         self._output: list[str] = []
+        self._console = None
+        if _RICH_AVAILABLE:
+            try:
+                from rich.console import Console
+                self._console = Console()
+            except ImportError:
+                pass
 
     # -- Command execution --
 
@@ -131,6 +164,19 @@ class SetupContext:
         except subprocess.TimeoutExpired:
             return CmdResult(-1, "", "timeout")
 
+    def run_cmd_live(self, cmd: list[str], timeout: int = 120,
+                     spinner_text: str = "") -> CmdResult:
+        """Run a command with a Rich spinner. Falls back to run_cmd.
+
+        Use for long-running operations where we want visual feedback.
+        The spinner runs while the command executes in capture mode.
+        """
+        if not self._console or not spinner_text:
+            return self.run_cmd(cmd, timeout=timeout)
+        from rich.spinner import Spinner  # noqa: F401
+        with self._console.status(f"  {spinner_text}", spinner="dots"):
+            return self.run_cmd(cmd, timeout=timeout)
+
     def which(self, name: str) -> Optional[str]:
         """Check if a command exists. Returns path or None."""
         import shutil
@@ -140,6 +186,14 @@ class SetupContext:
 
     def prompt(self, text: str, default: str = "") -> str:
         """Prompt user for text input. Override in tests."""
+        if self._console:
+            from rich.prompt import Prompt
+            try:
+                value = Prompt.ask(f"  {text}", default=default,
+                                   console=self._console)
+                return value.strip() or default
+            except EOFError:
+                return default
         try:
             value = input(f"  {text} [{default}]: ")
             return value.strip() or default
@@ -148,6 +202,13 @@ class SetupContext:
 
     def confirm(self, text: str, default: bool = True) -> bool:
         """Ask yes/no question. Override in tests."""
+        if self._console:
+            from rich.prompt import Confirm
+            try:
+                return Confirm.ask(f"  {text}", default=default,
+                                   console=self._console)
+            except EOFError:
+                return default
         suffix = "[Y/n]" if default else "[y/N]"
         try:
             value = input(f"  {text} {suffix}: ").strip().lower()
@@ -159,6 +220,22 @@ class SetupContext:
 
     def confirm_three_way(self, text: str) -> str:
         """Ask Y/n/s question. Returns 'yes', 'no', or 'skip'."""
+        if self._console:
+            from rich.prompt import Prompt
+            try:
+                value = Prompt.ask(
+                    f"  {text}",
+                    choices=["y", "n", "s"],
+                    default="y",
+                    console=self._console,
+                )
+            except EOFError:
+                return "yes"
+            if value in ("s", "skip"):
+                return "skip"
+            if value in ("n", "no"):
+                return "no"
+            return "yes"
         try:
             value = input(f"  {text} [Y/n/s(kip)]: ").strip().lower()
         except EOFError:
@@ -173,6 +250,24 @@ class SetupContext:
 
     def choose(self, items: list[str], label: str = "Choice") -> int:
         """Show numbered list, return 0-based index. Returns 0 on bad input."""
+        if self._console:
+            from rich.table import Table
+            from rich.prompt import IntPrompt
+            table = Table(show_header=False, box=None, padding=(0, 2))
+            table.add_column(style="bold cyan", justify="right", width=4)
+            table.add_column()
+            for i, item in enumerate(items, 1):
+                table.add_row(str(i), item)
+            self._console.print(table)
+            self._output.append("\n".join(
+                f"    {i}) {item}" for i, item in enumerate(items, 1)
+            ))
+            try:
+                idx = IntPrompt.ask(f"  {label}", default=1,
+                                    console=self._console) - 1
+                return idx if 0 <= idx < len(items) else 0
+            except (EOFError, ValueError):
+                return 0
         for i, item in enumerate(items, 1):
             self.print(f"    {i}) {item}")
         try:
@@ -191,20 +286,40 @@ class SetupContext:
 
     def print(self, msg: str = "") -> None:
         """Print a message. Override in tests to capture output."""
-        print(msg)
+        if self._console:
+            self._console.print(msg, highlight=False)
+        else:
+            print(msg)
         self._output.append(msg)
 
     def ok(self, msg: str) -> None:
-        self.print(f"  {GREEN}✓{NC} {msg}")
+        if self._console:
+            self._console.print(f"  [green]:heavy_check_mark:[/green] {msg}")
+            self._output.append(f"  ✓ {msg}")
+        else:
+            self.print(f"  {GREEN}✓{NC} {msg}")
 
     def warn(self, msg: str) -> None:
-        self.print(f"  {YELLOW}⚠{NC} {msg}")
+        if self._console:
+            self._console.print(f"  [yellow]:warning:[/yellow]  {msg}")
+            self._output.append(f"  ⚠ {msg}")
+        else:
+            self.print(f"  {YELLOW}⚠{NC} {msg}")
 
     def fail(self, msg: str) -> None:
-        self.print(f"  {RED}✗{NC} {msg}")
+        if self._console:
+            self._console.print(f"  [red]:cross_mark:[/red] {msg}")
+            self._output.append(f"  ✗ {msg}")
+        else:
+            self.print(f"  {RED}✗{NC} {msg}")
 
     def header(self, msg: str) -> None:
-        self.print(f"{BOLD}{msg}{NC}")
+        if self._console:
+            from rich.rule import Rule
+            self._console.print(Rule(msg, style="bold"))
+            self._output.append(msg)
+        else:
+            self.print(f"{BOLD}{msg}{NC}")
 
     # -- Filesystem --
 
@@ -361,10 +476,10 @@ def detect_tls_skip(ctx: SetupContext, engine: str) -> bool:
         return False
 
     ctx.print("")
-    ctx.print("  Checking container registry connectivity...")
-    r = ctx.run_cmd(
+    r = ctx.run_cmd_live(
         ["podman", "pull", "--quiet", "docker.io/library/alpine:latest"],
         timeout=30,
+        spinner_text="Checking container registry connectivity...",
     )
     if r.ok:
         ctx.ok("Container pull OK")
@@ -521,7 +636,8 @@ def parse_existing_env(ctx: SetupContext, path: Path) -> EnvConfig:
 def install_tools(ctx: SetupContext) -> bool:
     """Phase 3: Run mise install. Returns True on success."""
     ctx.header("Installing tools via mise...")
-    r = ctx.run_cmd(["mise", "install", "--yes"], timeout=300)
+    r = ctx.run_cmd_live(["mise", "install", "--yes"], timeout=300,
+                         spinner_text="Installing tools...")
     if not r.ok:
         ctx.warn("mise install failed — you may need to run 'mise install' manually")
         return False
@@ -540,7 +656,8 @@ def install_tools(ctx: SetupContext) -> bool:
 def install_sso_watcher(ctx: SetupContext) -> bool:
     """Phase 4: Run mise run sso-install. Returns True on success."""
     ctx.header("Installing SSO watcher...")
-    r = ctx.run_cmd(["mise", "run", "sso-install"], timeout=120)
+    r = ctx.run_cmd_live(["mise", "run", "sso-install"], timeout=120,
+                         spinner_text="Building webview and installing watcher...")
     if not r.ok:
         ctx.warn("SSO watcher install failed — run 'mise run sso-install' manually")
         ctx.print("")
@@ -1095,7 +1212,8 @@ def start_containers(ctx: SetupContext) -> bool:
     if not ctx.confirm("Start containers now?", default=True):
         return False
 
-    r = ctx.run_cmd(["mise", "run", "containers:up"], timeout=300)
+    r = ctx.run_cmd_live(["mise", "run", "containers:up"], timeout=300,
+                         spinner_text="Starting containers...")
     if r.ok:
         ctx.print("")
         ctx.ok("Containers started")
@@ -1112,14 +1230,30 @@ def start_containers(ctx: SetupContext) -> bool:
 def print_summary(ctx: SetupContext, config: EnvConfig) -> None:
     """Print setup completion summary."""
     port = config.proxy_port or "8888"
-    ctx.print("")
-    ctx.print(f"{BOLD}{GREEN}Setup complete!{NC}")
-    ctx.print("")
-    ctx.print(f"  Proxy:   http://localhost:{port}/")
-    ctx.print("  Logs:    mise run containers:logs")
-    ctx.print("  Watcher: mise run sso-status")
-    ctx.print(f"  Health:  curl http://localhost:{port}/healthz")
-    ctx.print("")
+    if ctx._console:
+        from rich.panel import Panel
+        from rich.table import Table
+        table = Table(show_header=False, box=None, padding=(0, 1))
+        table.add_column(style="bold", width=10)
+        table.add_column()
+        table.add_row("Proxy", f"http://localhost:{port}/")
+        table.add_row("Logs", "mise run containers:logs")
+        table.add_row("Watcher", "mise run sso-status")
+        table.add_row("Health", f"curl http://localhost:{port}/healthz")
+        ctx._console.print()
+        ctx._console.print(Panel(table, title="[bold green]Setup complete![/]",
+                                 border_style="green"))
+        ctx._console.print()
+        ctx._output.append("Setup complete!")
+    else:
+        ctx.print("")
+        ctx.print(f"{BOLD}{GREEN}Setup complete!{NC}")
+        ctx.print("")
+        ctx.print(f"  Proxy:   http://localhost:{port}/")
+        ctx.print("  Logs:    mise run containers:logs")
+        ctx.print("  Watcher: mise run sso-status")
+        ctx.print(f"  Health:  curl http://localhost:{port}/healthz")
+        ctx.print("")
 
 
 # ---------------------------------------------------------------------------
@@ -1128,14 +1262,28 @@ def print_summary(ctx: SetupContext, config: EnvConfig) -> None:
 
 def run_setup(ctx: SetupContext) -> int:
     """Run the full setup flow. Returns exit code (0=success, 1=failure)."""
-    ctx.print(f"\n{BOLD}bazel-aws-maven-proxy setup{NC}\n")
+    if ctx._console:
+        from rich.panel import Panel
+        ctx._console.print()
+        ctx._console.print(Panel("[bold]bazel-aws-maven-proxy setup[/]",
+                                 style="blue", expand=False))
+        ctx._console.print()
+        ctx._output.append("bazel-aws-maven-proxy setup")
+    else:
+        ctx.print(f"\n{BOLD}bazel-aws-maven-proxy setup{NC}\n")
 
     # Phase 1: Prerequisites
     ctx.header("Checking prerequisites...")
     prereqs = check_prerequisites(ctx)
     if not prereqs.ok:
         n = len(prereqs.errors)
-        ctx.print(f"\n{RED}{n} prerequisite(s) missing. Fix the above and re-run.{NC}")
+        if ctx._console:
+            ctx._console.print(
+                f"\n[bold red]{n} prerequisite(s) missing. Fix the above and re-run.[/]"
+            )
+            ctx._output.append(f"{n} prerequisite(s) missing.")
+        else:
+            ctx.print(f"\n{RED}{n} prerequisite(s) missing. Fix the above and re-run.{NC}")
         return 1
     ctx.print("")
 
@@ -1174,6 +1322,8 @@ def run_setup(ctx: SetupContext) -> int:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    global _RICH_AVAILABLE
+    _RICH_AVAILABLE = _ensure_rich()
     try:
         ctx = SetupContext()
         sys.exit(run_setup(ctx))
