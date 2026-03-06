@@ -928,25 +928,6 @@ class TestConfigureSso:
                 CmdResult(1),
         }
 
-    def _discover_commands(self, *, login_ok=True, accounts=None, roles=None):
-        """Commands for auto-discover flow (login + list accounts/roles)."""
-        import json as _json
-        cmds = dict(self._not_configured())
-        # do_sso_login runs python3 -c "...run_aws_sso_login('dev-setup-tmp')..."
-        cmds["python3"] = (
-            CmdResult(0) if login_ok else CmdResult(1, "", "login failed")
-        )
-        if accounts is not None:
-            # Match any list-accounts call
-            cmds["aws sso list-accounts"] = CmdResult(
-                0, _json.dumps({"accountList": accounts})
-            )
-        if roles is not None:
-            cmds["aws sso list-account-roles"] = CmdResult(
-                0, _json.dumps({"roleList": roles})
-            )
-        return cmds
-
     def _cache_file(self, start_url="https://myorg.awsapps.com/start"):
         """Return (path, content) for a mock SSO cache file."""
         import json as _json
@@ -958,6 +939,38 @@ class TestConfigureSso:
             "expiresAt": "2099-01-01T00:00:00Z",
         })
         return path, content
+
+    def _discover_commands(self, *, login_ok=True, accounts=None, roles=None,
+                           ctx_ref=None):
+        """Commands for auto-discover flow (login + list accounts/roles).
+
+        ctx_ref: mutable list [ctx] — set ctx_ref[0] = ctx after creating
+        MockSetupContext. The login callback uses it to write the cache
+        file (simulating what aws sso login does on the real filesystem).
+        """
+        import json as _json
+        cmds = dict(self._not_configured())
+
+        if login_ok and ctx_ref is not None:
+            cache_path, cache_content = self._cache_file()
+            def _login_with_cache(cmd):
+                ctx_ref[0]._files[cache_path] = cache_content
+                return CmdResult(0)
+            cmds["python3"] = _login_with_cache
+        else:
+            cmds["python3"] = (
+                CmdResult(0) if login_ok else CmdResult(1, "", "login failed")
+            )
+
+        if accounts is not None:
+            cmds["aws sso list-accounts"] = CmdResult(
+                0, _json.dumps({"accountList": accounts})
+            )
+        if roles is not None:
+            cmds["aws sso list-account-roles"] = CmdResult(
+                0, _json.dumps({"roleList": roles})
+            )
+        return cmds
 
     def test_already_configured_modern(self):
         ctx = MockSetupContext(commands={
@@ -997,7 +1010,6 @@ class TestConfigureSso:
         """Login succeeds → list accounts → pick → list roles → pick → config written."""
         home = str(Path.home())
         config_path = f"{home}/.aws/config"
-        cache_path, cache_content = self._cache_file()
         accounts = [
             {"accountId": "111111111111", "accountName": "dev-account"},
             {"accountId": "222222222222", "accountName": "prod-account"},
@@ -1006,13 +1018,16 @@ class TestConfigureSso:
             {"roleName": "Admin", "accountId": "222222222222"},
             {"roleName": "ReadOnly", "accountId": "222222222222"},
         ]
+        ctx_ref = [None]
         ctx = MockSetupContext(
-            commands=self._discover_commands(accounts=accounts, roles=roles),
+            commands=self._discover_commands(accounts=accounts, roles=roles,
+                                             ctx_ref=ctx_ref),
             three_way=["yes"],
             prompts=["https://myorg.awsapps.com/start", "us-east-1"],
             choices=[1, 0],  # pick prod-account (idx 1), Admin role (idx 0)
-            files={config_path: "", cache_path: cache_content},
+            files={config_path: ""},
         )
+        ctx_ref[0] = ctx
         assert configure_sso(ctx, "dev") is True
         content = ctx._files[config_path]
         assert "sso_account_id = 222222222222" in content
@@ -1023,16 +1038,18 @@ class TestConfigureSso:
         """Single role available → auto-selected without prompt."""
         home = str(Path.home())
         config_path = f"{home}/.aws/config"
-        cache_path, cache_content = self._cache_file()
         accounts = [{"accountId": "111111111111", "accountName": "my-account"}]
         roles = [{"roleName": "OnlyRole", "accountId": "111111111111"}]
+        ctx_ref = [None]
         ctx = MockSetupContext(
-            commands=self._discover_commands(accounts=accounts, roles=roles),
+            commands=self._discover_commands(accounts=accounts, roles=roles,
+                                             ctx_ref=ctx_ref),
             three_way=["yes"],
             prompts=["https://myorg.awsapps.com/start", "us-east-1"],
             choices=[0],  # pick first account
-            files={config_path: "", cache_path: cache_content},
+            files={config_path: ""},
         )
+        ctx_ref[0] = ctx
         assert configure_sso(ctx, "dev") is True
         content = ctx._files[config_path]
         assert "sso_role_name = OnlyRole" in content
@@ -1068,16 +1085,18 @@ class TestConfigureSso:
         home = str(Path.home())
         config_path = f"{home}/.aws/config"
         existing = "[profile dev]\nsso_account_id = old\n"
-        cache_path, cache_content = self._cache_file()
         accounts = [{"accountId": "111111111111", "accountName": "acc"}]
         roles = [{"roleName": "Role", "accountId": "111111111111"}]
+        ctx_ref = [None]
         ctx = MockSetupContext(
-            commands=self._discover_commands(accounts=accounts, roles=roles),
+            commands=self._discover_commands(accounts=accounts, roles=roles,
+                                             ctx_ref=ctx_ref),
             three_way=["yes"],
             prompts=["https://myorg.awsapps.com/start", "us-east-1"],
             choices=[0],
-            files={config_path: existing, cache_path: cache_content},
+            files={config_path: existing},
         )
+        ctx_ref[0] = ctx
         assert configure_sso(ctx, "dev") is False
         out = output_text(ctx)
         assert "already exists" in out.lower()
@@ -1086,50 +1105,59 @@ class TestConfigureSso:
         """Temporary sso-session sections removed after discover."""
         home = str(Path.home())
         config_path = f"{home}/.aws/config"
-        cache_path, cache_content = self._cache_file()
         accounts = [{"accountId": "111", "accountName": "acc"}]
         roles = [{"roleName": "Role", "accountId": "111"}]
+        ctx_ref = [None]
         ctx = MockSetupContext(
-            commands=self._discover_commands(accounts=accounts, roles=roles),
+            commands=self._discover_commands(accounts=accounts, roles=roles,
+                                             ctx_ref=ctx_ref),
             three_way=["yes"],
             prompts=["https://myorg.awsapps.com/start", "us-east-1"],
             choices=[0],
-            files={config_path: "", cache_path: cache_content},
+            files={config_path: ""},
         )
+        ctx_ref[0] = ctx
         configure_sso(ctx, "dev")
         content = ctx._files[config_path]
         assert "dev-setup-tmp" not in content
 
-    def test_stale_oidc_registrations_cleared(self):
-        """Stale OIDC client registrations cleared, token files preserved."""
+    def test_sso_cache_cleared_before_login(self):
+        """All SSO cache files cleared before discover login."""
         import json as _json
         home = str(Path.home())
         config_path = f"{home}/.aws/config"
-        cache_path, cache_content = self._cache_file()
-        # Stale client registration (no accessToken)
+        # Stale client registration
         stale_path = f"{home}/.aws/sso/cache/stale-client.json"
         stale_content = _json.dumps({
             "clientId": "old-id", "clientSecret": "old-secret",
             "expiresAt": "2099-01-01T00:00:00Z",
         })
+        # Old token (wrong scope)
+        old_token_path = f"{home}/.aws/sso/cache/old-token.json"
+        old_token_content = _json.dumps({
+            "accessToken": "old-token", "startUrl": "https://x.awsapps.com/start",
+            "expiresAt": "2099-01-01T00:00:00Z",
+        })
         accounts = [{"accountId": "111", "accountName": "acc"}]
         roles = [{"roleName": "Role", "accountId": "111"}]
+        ctx_ref = [None]
         ctx = MockSetupContext(
-            commands=self._discover_commands(accounts=accounts, roles=roles),
+            commands=self._discover_commands(accounts=accounts, roles=roles,
+                                             ctx_ref=ctx_ref),
             three_way=["yes"],
             prompts=["https://myorg.awsapps.com/start", "us-east-1"],
             choices=[0],
             files={
                 config_path: "",
-                cache_path: cache_content,
                 stale_path: stale_content,
+                old_token_path: old_token_content,
             },
         )
+        ctx_ref[0] = ctx
         configure_sso(ctx, "dev")
-        # Stale registration removed
+        # Both stale registration and old token removed
         assert stale_path in ctx._removed
-        # Token file preserved (not removed)
-        assert cache_path not in ctx._removed
+        assert old_token_path in ctx._removed
 
 
 # ===================================================================
