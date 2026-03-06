@@ -171,6 +171,22 @@ class SetupContext:
             return "no"
         return "yes"
 
+    def choose(self, items: list[str], label: str = "Choice") -> int:
+        """Show numbered list, return 0-based index. Returns 0 on bad input."""
+        for i, item in enumerate(items, 1):
+            self.print(f"    {i}) {item}")
+        try:
+            value = input(f"  {label} [1]: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return 0
+        if not value:
+            return 0
+        try:
+            idx = int(value) - 1
+            return idx if 0 <= idx < len(items) else 0
+        except ValueError:
+            return 0
+
     # -- Output --
 
     def print(self, msg: str = "") -> None:
@@ -201,6 +217,11 @@ class SetupContext:
     def write_file(self, path: Path, content: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content)
+
+    def glob_files(self, pattern: str) -> list[str]:
+        """Return file paths matching a glob pattern. Override in tests."""
+        import glob as _glob
+        return _glob.glob(pattern)
 
     def remove_file(self, path: Path) -> None:
         try:
@@ -657,11 +678,182 @@ sso_registration_scopes = sso:account:access
     return True
 
 
+def _find_sso_access_token(ctx: SetupContext, start_url: str) -> str:
+    """Find a valid SSO access token from ~/.aws/sso/cache/ matching start_url."""
+    import json as _json
+    cache_dir = Path.home() / ".aws" / "sso" / "cache"
+    pattern = str(cache_dir / "*.json")
+
+    best_token = ""
+    best_expiry = ""
+
+    try:
+        for path_str in ctx.glob_files(pattern):
+            try:
+                content = ctx.read_file(Path(path_str))
+                data = _json.loads(content)
+                token = data.get("accessToken", "")
+                url = data.get("startUrl", "")
+                expiry = data.get("expiresAt", "")
+                if token and url and start_url.rstrip("/#") in url.rstrip("/#"):
+                    if expiry > best_expiry:
+                        best_token = token
+                        best_expiry = expiry
+            except (OSError, _json.JSONDecodeError, KeyError):
+                continue
+    except Exception:
+        pass
+
+    return best_token
+
+
+def _sso_list_accounts(ctx: SetupContext, token: str, sso_region: str) -> list[dict]:
+    """Call aws sso list-accounts, return list of {accountId, accountName}."""
+    import json as _json
+    r = ctx.run_cmd([
+        "aws", "sso", "list-accounts",
+        "--access-token", token,
+        "--region", sso_region,
+    ])
+    if not r.ok:
+        return []
+    try:
+        data = _json.loads(r.stdout)
+        return data.get("accountList", [])
+    except (ValueError, KeyError):
+        return []
+
+
+def _sso_list_roles(ctx: SetupContext, token: str, account_id: str, sso_region: str) -> list[dict]:
+    """Call aws sso list-account-roles, return list of {roleName, accountId}."""
+    import json as _json
+    r = ctx.run_cmd([
+        "aws", "sso", "list-account-roles",
+        "--access-token", token,
+        "--account-id", account_id,
+        "--region", sso_region,
+    ])
+    if not r.ok:
+        return []
+    try:
+        data = _json.loads(r.stdout)
+        return data.get("roleList", [])
+    except (ValueError, KeyError):
+        return []
+
+
+def _discover_account_and_role(
+    ctx: SetupContext,
+    profile: str,
+    start_url: str,
+    sso_region: str,
+) -> tuple[str, str]:
+    """Login to SSO, list accounts/roles, let user pick.
+
+    Returns (account_id, role_name) or ("", "") on failure.
+    """
+    # Write temporary sso-session for login
+    session_name = f"{profile}-setup-tmp"
+    config_path = Path.home() / ".aws" / "config"
+    existing = _read_aws_config(ctx)
+
+    tmp_section = f"""
+[profile {session_name}]
+sso_session = {session_name}
+
+[sso-session {session_name}]
+sso_start_url = {start_url}
+sso_region = {sso_region}
+sso_registration_scopes = sso:account:access
+"""
+    if existing and not existing.endswith("\n"):
+        existing += "\n"
+    ctx.write_file(config_path, existing + tmp_section)
+
+    ctx.print("")
+    ctx.print("  Logging in to SSO to discover accounts and roles...")
+    ctx.print("  A browser or webview will open for authentication.")
+    ctx.print("")
+
+    r = ctx.run_cmd(
+        ["aws", "sso", "login", "--profile", session_name],
+        interactive=True, timeout=300,
+    )
+
+    if not r.ok:
+        ctx.warn("SSO login failed — falling back to manual entry")
+        # Clean up temp config
+        _remove_temp_config(ctx, config_path, session_name)
+        return ("", "")
+
+    # Find access token from cache
+    token = _find_sso_access_token(ctx, start_url)
+    if not token:
+        ctx.warn("Could not find SSO token after login — falling back to manual entry")
+        _remove_temp_config(ctx, config_path, session_name)
+        return ("", "")
+
+    # List accounts
+    accounts = _sso_list_accounts(ctx, token, sso_region)
+    if not accounts:
+        ctx.warn("No accounts found — falling back to manual entry")
+        _remove_temp_config(ctx, config_path, session_name)
+        return ("", "")
+
+    ctx.print("")
+    ctx.print("  Available accounts:")
+    account_labels = [
+        f"{a['accountName']} ({a['accountId']})" for a in accounts
+    ]
+    idx = ctx.choose(account_labels, "Select account")
+    account = accounts[idx]
+    account_id = account["accountId"]
+    ctx.ok(f"Account: {account['accountName']} ({account_id})")
+
+    # List roles
+    roles = _sso_list_roles(ctx, token, account_id, sso_region)
+    if not roles:
+        ctx.warn("No roles found — falling back to manual entry")
+        _remove_temp_config(ctx, config_path, session_name)
+        return (account_id, "")
+
+    if len(roles) == 1:
+        role_name = roles[0]["roleName"]
+        ctx.ok(f"Role: {role_name} (only role available)")
+    else:
+        ctx.print("  Available roles:")
+        role_labels = [r["roleName"] for r in roles]
+        ridx = ctx.choose(role_labels, "Select role")
+        role_name = roles[ridx]["roleName"]
+        ctx.ok(f"Role: {role_name}")
+
+    # Clean up temp config
+    _remove_temp_config(ctx, config_path, session_name)
+
+    return (account_id, role_name)
+
+
+def _remove_temp_config(ctx: SetupContext, config_path: Path, session_name: str) -> None:
+    """Remove temporary sso-session sections from config."""
+    try:
+        content = ctx.read_file(config_path)
+    except (OSError, PermissionError):
+        return
+    # Remove [profile session_name] and [sso-session session_name] blocks
+    cleaned = re.sub(
+        rf"\n?\[profile {re.escape(session_name)}\][^\[]*", "", content
+    )
+    cleaned = re.sub(
+        rf"\n?\[sso-session {re.escape(session_name)}\][^\[]*", "", cleaned
+    )
+    ctx.write_file(config_path, cleaned)
+
+
 def configure_sso(ctx: SetupContext, profile: str) -> bool:
     """Phase 6: Check SSO config, optionally configure it.
 
-    Uses our own prompts instead of `aws configure sso` to avoid its poor
-    interactive experience (no backspace, no editing, auth-code confusion).
+    Prompts for start URL + region, then logs in to SSO and auto-discovers
+    accounts and roles. Falls back to manual entry if login fails.
     Writes directly to ~/.aws/config with modern sso-session style.
 
     Returns True if SSO is configured (pre-existing or newly configured).
@@ -691,15 +883,25 @@ def configure_sso(ctx: SetupContext, profile: str) -> bool:
         ctx.print("")
         return False
 
-    # Prompt for SSO values
+    # Prompt for SSO start URL and region (visible on AWS portal page)
     ctx.print("")
-    ctx.print("  Enter your AWS SSO details (ask your admin if unsure):")
+    ctx.print("  You can find these values on your AWS access portal page.")
     ctx.print("")
 
     start_url = ctx.prompt("SSO start URL", "https://your-org.awsapps.com/start")
     sso_region = ctx.prompt("SSO region", "us-east-1")
-    account_id = ctx.prompt("AWS account ID", "")
-    role_name = ctx.prompt("SSO role name", "")
+
+    # Try auto-discover: login → list accounts → list roles
+    account_id, role_name = _discover_account_and_role(ctx, profile, start_url, sso_region)
+
+    # Fall back to manual entry for missing values
+    if not account_id:
+        ctx.print("")
+        ctx.print("  Enter account ID and role name manually:")
+        account_id = ctx.prompt("AWS account ID", "")
+    if not role_name:
+        if account_id:
+            role_name = ctx.prompt("SSO role name", "")
 
     # Validate required fields
     if not account_id:
@@ -711,7 +913,7 @@ def configure_sso(ctx: SetupContext, profile: str) -> bool:
         ctx.print("")
         return False
 
-    session_name = profile  # session name matches profile for simplicity
+    session_name = profile
 
     if _write_sso_config(ctx, profile, session_name, start_url, sso_region, account_id, role_name):
         ctx.ok(f"Wrote SSO config for profile '{profile}'")

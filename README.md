@@ -58,7 +58,7 @@ This interactive wizard will:
 - Verify prerequisites (aws, podman/docker, swiftc)
 - Prompt for AWS profile, region, S3 bucket, and create `.env`
 - Ask whether you're behind a corporate proxy that intercepts HTTPS (sets `SKIP_TLS_VERIFY`)
-- Configure SSO if your profile isn't set up yet (prompts for start URL, region, account, role)
+- Configure SSO if your profile isn't set up yet (logs in, auto-discovers accounts/roles)
 - Install Python via mise
 - Build the login webview and install the SSO watcher (launchd)
 - Optionally start containers

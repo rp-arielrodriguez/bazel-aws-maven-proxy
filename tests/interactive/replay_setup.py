@@ -70,6 +70,7 @@ class ReplayContext(SetupContext):
         prompts: list[str] = None,
         confirms: list[bool] = None,
         three_way: list[str] = None,
+        choices: list[int] = None,
         files: dict[str, str] = None,
         env: dict[str, str] = None,
     ):
@@ -82,6 +83,7 @@ class ReplayContext(SetupContext):
         self._prompts = list(prompts or [])
         self._confirms = list(confirms or [])
         self._three_way = list(three_way or [])
+        self._choices = list(choices or [])
         self._files = dict(files or {})
 
     def which(self, name: str) -> str | None:
@@ -146,6 +148,19 @@ class ReplayContext(SetupContext):
         time.sleep(STEP_DELAY)
         return answer
 
+    def choose(self, items: list[str], label: str = "Choice") -> int:
+        if self._choices:
+            idx = self._choices.pop(0)
+        else:
+            idx = 0
+        for i, item in enumerate(items, 1):
+            marker = " ←" if i - 1 == idx else ""
+            self._output.append(f"    {i}) {item}{marker}")
+            print(f"    {i}) {item}{marker}")
+        annotation(f"choose: \"{label}\" → {idx} ({items[idx] if idx < len(items) else '?'})")
+        time.sleep(STEP_DELAY)
+        return idx
+
     def print(self, msg: str = "") -> None:
         time.sleep(STEP_DELAY)
         print(msg)
@@ -168,6 +183,11 @@ class ReplayContext(SetupContext):
     def remove_file(self, path: Path) -> None:
         key = str(path)
         self._files.pop(key, None)
+
+    def glob_files(self, pattern: str) -> list[str]:
+        """Match virtual files against a glob-style pattern."""
+        import fnmatch
+        return [p for p in self._files if fnmatch.fnmatch(p, pattern)]
 
     def mkdir(self, path: Path) -> None:
         pass
@@ -396,11 +416,14 @@ SSO_LOGIN_MODE="auto"
 
 
 def scenario_sso_not_configured():
-    """Profile has no SSO config, user says configure, provides empty account ID."""
+    """Profile has no SSO config, user says configure, login fails, empty account ID."""
     scenario_banner(
-        "SSO Not Configured + Missing Account ID",
-        "Profile has no SSO, user says yes to configure, but leaves account ID empty"
+        "SSO Not Configured + Login Fails + Missing Account ID",
+        "No SSO → configure → login fails → manual fallback → empty account ID → fail"
     )
+
+    home = str(Path.home())
+    config_path = f"{home}/.aws/config"
 
     commands = {
         **_base_commands_all(),
@@ -408,16 +431,20 @@ def scenario_sso_not_configured():
             CmdResult(1, "", "not set"),
         ("aws", "configure", "get", "sso_account_id", "--profile", "default"):
             CmdResult(1, "", "not set"),
+        # SSO login fails → triggers manual fallback
+        ("aws", "sso", "login", "--profile", "default-setup-tmp"):
+            CmdResult(1, "", "login failed"),
     }
 
     ctx = ReplayContext(
         tools=_base_tools_all(),
         commands=commands,
-        # env prompts + SSO prompts (start_url, region, account_id="", role)
+        # env prompts + SSO prompts (start_url, region) + manual fallback (account_id="")
         prompts=["default", "us-west-2", "my-bucket", "8888", "notify",
-                 "https://myorg.awsapps.com/start", "us-east-1", "", "MyRole"],
+                 "https://myorg.awsapps.com/start", "us-east-1", ""],
         three_way=["yes"],  # yes to configure SSO
         confirms=[False, True],  # skip TLS, start containers
+        files={config_path: ""},
         env={"TERM_PROGRAM": "Terminal"},
     )
 
@@ -688,7 +715,7 @@ SCENARIOS = {
     "6": ("No swiftc — user declines", scenario_no_swiftc_decline),
     "6b": ("No swiftc — user installs", scenario_no_swiftc_accept),
     "7": ("Keep Existing .env", scenario_existing_env_keep),
-    "8": ("SSO Not Configured + Fails", scenario_sso_not_configured),
+    "8": ("SSO Not Configured + Login Fails", scenario_sso_not_configured),
     "9": ("SSO Not Configured + Skip", scenario_sso_skip),
     "10": ("Expired Creds + Login OK", scenario_creds_expired_login_succeeds),
     "11": ("Expired Creds + Login Fails", scenario_creds_expired_login_fails),

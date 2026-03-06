@@ -266,7 +266,11 @@ flowchart TB
         s1{SSO configured?}
         s1 -->|modern/legacy| s2[OK]
         s1 -->|no| s3{Configure now?}
-        s3 -->|yes| s4[Prompt SSO details + write config]
+        s3 -->|yes| s4[Prompt start URL + region]
+        s4 --> s5a[Login → auto-discover accounts/roles]
+        s5a -->|success| s6[Write config]
+        s5a -->|fail| s5b[Manual fallback: prompt account/role]
+        s5b --> s6
         s3 -->|no/skip| s5[Skip]
     end
 

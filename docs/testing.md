@@ -266,10 +266,11 @@ Uses `MockSetupContext` — subclass of `SetupContext` with in-memory filesystem
 - Modern sso_session, legacy, none, empty output
 
 **Configure SSO — `TestConfigureSso`** (10 tests):
-- Already configured (modern/legacy), user yes/no/skip
-- Writes config with all fields + registration_scopes, appends to existing
-- Missing account ID/role name rejected, duplicate profile not overwritten
-- Creates config file if missing
+- Already configured (modern/legacy), user says no/skip
+- Auto-discover: login → list accounts → pick → list roles → pick → config written
+- Auto-discover: single role auto-selected, temp config cleaned up
+- Login fails → manual fallback, missing account ID rejected
+- Duplicate profile not overwritten
 
 **Credentials Valid — `TestCheckCredentialsValid`** (2 tests):
 - Valid, invalid
