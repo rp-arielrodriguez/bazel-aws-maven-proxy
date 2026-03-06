@@ -1991,3 +1991,374 @@ class TestDoSsoLogin:
         cmd_str = " ".join(called_with[0])
         assert "my-profile" in cmd_str
         assert "run_aws_sso_login" in cmd_str
+
+
+# ===================================================================
+# TestRunSetupScenarios — end-to-end run_setup flows from replay
+# ===================================================================
+
+class TestRunSetupScenarios:
+    """End-to-end run_setup scenarios converted from replay_setup.py.
+
+    Each test exercises the full 8-phase setup flow with specific
+    conditions not covered by TestRunSetup.
+    """
+
+    def _base_ctx(self, *, extra_commands=None, extra_files=None,
+                  prompts=None, confirms=None, three_way=None,
+                  choices=None, tools=None, env=None):
+        """Build a ctx with all prereqs satisfied, headless by default."""
+        base_tools = tools or {"mise", "aws", "podman", "swiftc"}
+        base_commands = {
+            ("mise", "--version"): CmdResult(0, "2024.12.0\n"),
+            ("aws", "--version"): CmdResult(0, "aws-cli/2.15.30 Python/3.11\n"),
+            ("podman", "--version"): CmdResult(0, "podman version 5.0.0\n"),
+            ("python3", "--version"): CmdResult(0, "Python 3.11.14\n"),
+            ("mise", "install", "--yes"): CmdResult(0),
+            ("mise", "run", "sso-install"): CmdResult(0),
+            ("pgrep", "-q", "WindowServer"): CmdResult(1),  # headless
+        }
+        if extra_commands:
+            base_commands.update(extra_commands)
+
+        base_files = {}
+        if extra_files:
+            base_files.update(extra_files)
+
+        return MockSetupContext(
+            tools=base_tools,
+            commands=base_commands,
+            files=base_files,
+            prompts=prompts or ["", "", "", "", ""],
+            confirms=confirms or [],
+            three_way=three_way or [],
+            choices=choices or [],
+            env=env or {},
+        )
+
+    def test_docker_fallback(self):
+        """Scenario 5: docker instead of podman, full flow succeeds."""
+        ctx = self._base_ctx(
+            tools={"mise", "aws", "docker", "swiftc"},
+            extra_commands={
+                ("docker", "--version"): CmdResult(0, "Docker version 24.0.7\n"),
+                ("aws", "configure", "get", "sso_session", "--profile", "default"):
+                    CmdResult(0, "my-sess\n"),
+                ("aws", "sts", "get-caller-identity", "--profile", "default"):
+                    CmdResult(0, '{"Account":"123"}\n'),
+                ("aws", "s3", "ls", "s3://my-bucket/", "--profile", "default"):
+                    CmdResult(0, "file.jar\n"),
+                ("mise", "run", "containers:up"): CmdResult(0),
+            },
+            prompts=["default", "us-west-2", "my-bucket", "8888", "notify"],
+            confirms=[True],  # start containers
+        )
+        assert run_setup(ctx) == 0
+        out = output_text(ctx)
+        assert "docker" in out.lower()
+        assert "Setup complete" in out
+
+    def test_keep_existing_env(self):
+        """Scenario 7: existing .env preserved, parsed profile propagates."""
+        env_content = (
+            'AWS_PROFILE="my-profile"\n'
+            'AWS_REGION="eu-west-1"\n'
+            'S3_BUCKET_NAME="existing-bucket"\n'
+            'PROXY_PORT="9999"\n'
+            'SSO_LOGIN_MODE="auto"\n'
+        )
+        ctx = self._base_ctx(
+            extra_commands={
+                ("aws", "configure", "get", "sso_session", "--profile", "my-profile"):
+                    CmdResult(0, "my-sess\n"),
+                ("aws", "sts", "get-caller-identity", "--profile", "my-profile"):
+                    CmdResult(0, '{"Account":"123"}\n'),
+                ("aws", "s3", "ls", "s3://existing-bucket/", "--profile", "my-profile"):
+                    CmdResult(0, "file.jar\n"),
+                ("mise", "run", "containers:up"): CmdResult(0),
+            },
+            extra_files={
+                str(Path("/fake/repo/.env")): env_content,
+            },
+            confirms=[False, True],  # don't overwrite .env, start containers
+        )
+        assert run_setup(ctx) == 0
+        out = output_text(ctx)
+        assert "Setup complete" in out
+        # Profile from parsed .env was used
+        assert "my-profile" in out
+
+    def test_sso_not_configured_login_fails_empty_account(self):
+        """Scenario 8: SSO configure → login fails → manual → empty account."""
+        home = str(Path.home())
+        ctx = self._base_ctx(
+            extra_commands={
+                ("aws", "configure", "get", "sso_session", "--profile", "default"):
+                    CmdResult(1),
+                ("aws", "configure", "get", "sso_account_id", "--profile", "default"):
+                    CmdResult(1),
+                "python3": lambda cmd: (
+                    CmdResult(1, "", "login failed") if "-c" in cmd
+                    else CmdResult(0, "Python 3.11.14\n")
+                ),
+            },
+            extra_files={f"{home}/.aws/config": ""},
+            prompts=[
+                "default", "us-west-2", "my-bucket", "8888", "notify",
+                "https://org.awsapps.com/start", "us-east-1",  # SSO URL + region
+                "",  # empty account → configure_sso returns False
+            ],
+            three_way=["yes"],  # configure SSO
+            confirms=[False],   # don't start containers
+        )
+        assert run_setup(ctx) == 0
+        out = output_text(ctx)
+        assert "Setup complete" in out
+
+    def test_expired_creds_login_fails(self):
+        """Scenario 11: creds expired, login fails, S3 fails → warns, rc=0."""
+        ctx = self._base_ctx(
+            extra_commands={
+                ("aws", "configure", "get", "sso_session", "--profile", "default"):
+                    CmdResult(0, "my-sess\n"),
+                ("aws", "sts", "get-caller-identity", "--profile", "default"):
+                    CmdResult(1, "", "expired"),
+                "python3": lambda cmd: (
+                    CmdResult(1, "", "login timeout") if "-c" in cmd
+                    else CmdResult(0, "Python 3.11.14\n")
+                ),
+                ("aws", "s3", "ls", "s3://my-bucket/", "--profile", "default"):
+                    CmdResult(1, "", "access denied"),
+            },
+            prompts=["default", "us-west-2", "my-bucket", "8888", "notify"],
+            confirms=[False],  # don't start containers
+        )
+        assert run_setup(ctx) == 0
+        out = output_text(ctx)
+        assert "login failed" in out.lower() or "login" in out.lower()
+        assert "Setup complete" in out
+
+    def test_placeholder_bucket_skips_s3(self):
+        """Scenario 12: placeholder bucket name → S3 validation skipped."""
+        ctx = self._base_ctx(
+            extra_commands={
+                ("aws", "configure", "get", "sso_session", "--profile", "default"):
+                    CmdResult(0, "my-sess\n"),
+                ("aws", "sts", "get-caller-identity", "--profile", "default"):
+                    CmdResult(0, '{"Account":"123"}\n'),
+                ("mise", "run", "containers:up"): CmdResult(0),
+            },
+            prompts=["default", "us-west-2", "your-maven-bucket", "8888", "notify"],
+            confirms=[True],
+        )
+        assert run_setup(ctx) == 0
+        # S3 validation was skipped — no s3 ls output
+        out = output_text(ctx)
+        assert "Setup complete" in out
+
+    def test_headless_skips_permissions(self):
+        """Scenario 13: no GUI → permission checks skipped entirely."""
+        ctx = self._base_ctx(
+            extra_commands={
+                ("aws", "configure", "get", "sso_session", "--profile", "default"):
+                    CmdResult(0, "my-sess\n"),
+                ("aws", "sts", "get-caller-identity", "--profile", "default"):
+                    CmdResult(0, '{"Account":"123"}\n'),
+                ("aws", "s3", "ls", "s3://my-bucket/", "--profile", "default"):
+                    CmdResult(0, "file.jar\n"),
+                ("mise", "run", "containers:up"): CmdResult(0),
+            },
+            prompts=["default", "us-west-2", "my-bucket", "8888", "notify"],
+            confirms=[True],
+            env={},  # no DISPLAY, no TERM_PROGRAM
+        )
+        assert run_setup(ctx) == 0
+        out = output_text(ctx)
+        # No permission-related output
+        assert "System Events" not in out
+        assert "Setup complete" in out
+
+    def test_mise_install_fails_continues(self):
+        """Scenario 14: mise install fails → warns, setup still rc=0."""
+        ctx = self._base_ctx(
+            extra_commands={
+                ("mise", "install", "--yes"): CmdResult(1, "", "install error"),
+                ("aws", "configure", "get", "sso_session", "--profile", "default"):
+                    CmdResult(0, "my-sess\n"),
+                ("aws", "sts", "get-caller-identity", "--profile", "default"):
+                    CmdResult(0, '{"Account":"123"}\n'),
+                ("aws", "s3", "ls", "s3://my-bucket/", "--profile", "default"):
+                    CmdResult(0, "file.jar\n"),
+                ("mise", "run", "containers:up"): CmdResult(0),
+            },
+            prompts=["default", "us-west-2", "my-bucket", "8888", "notify"],
+            confirms=[True],
+        )
+        assert run_setup(ctx) == 0
+        out = output_text(ctx)
+        assert "mise install failed" in out.lower() or "manually" in out.lower()
+        assert "Setup complete" in out
+
+    def test_invalid_sso_mode_corrected(self):
+        """Scenario 15: bogus SSO mode → defaulted to notify in .env."""
+        ctx = self._base_ctx(
+            extra_commands={
+                ("aws", "configure", "get", "sso_session", "--profile", "default"):
+                    CmdResult(0, "my-sess\n"),
+                ("aws", "sts", "get-caller-identity", "--profile", "default"):
+                    CmdResult(0, '{"Account":"123"}\n'),
+                ("aws", "s3", "ls", "s3://my-bucket/", "--profile", "default"):
+                    CmdResult(0, "file.jar\n"),
+                ("mise", "run", "containers:up"): CmdResult(0),
+            },
+            prompts=["default", "us-west-2", "my-bucket", "8888", "bogus"],
+            confirms=[True],
+        )
+        assert run_setup(ctx) == 0
+        out = output_text(ctx)
+        assert "Invalid mode" in out
+        # .env should have corrected mode
+        env_content = ctx._files.get(str(Path("/fake/repo/.env")), "")
+        assert 'SSO_LOGIN_MODE="notify"' in env_content
+
+    def test_legacy_sso_config(self):
+        """Scenario 17: legacy SSO (sso_account_id, no sso_session)."""
+        ctx = self._base_ctx(
+            extra_commands={
+                ("aws", "configure", "get", "sso_session", "--profile", "default"):
+                    CmdResult(1),
+                ("aws", "configure", "get", "sso_account_id", "--profile", "default"):
+                    CmdResult(0, "123456789\n"),
+                ("aws", "sts", "get-caller-identity", "--profile", "default"):
+                    CmdResult(0, '{"Account":"123"}\n'),
+                ("aws", "s3", "ls", "s3://my-bucket/", "--profile", "default"):
+                    CmdResult(0, "file.jar\n"),
+                ("mise", "run", "containers:up"): CmdResult(0),
+            },
+            prompts=["default", "us-west-2", "my-bucket", "8888", "notify"],
+            confirms=[True],
+        )
+        assert run_setup(ctx) == 0
+        out = output_text(ctx)
+        assert "legacy" in out.lower()
+        assert "Setup complete" in out
+
+    def test_container_start_fails(self):
+        """Scenario 18: containers:up fails → warns, rc=0."""
+        ctx = self._base_ctx(
+            extra_commands={
+                ("aws", "configure", "get", "sso_session", "--profile", "default"):
+                    CmdResult(0, "my-sess\n"),
+                ("aws", "sts", "get-caller-identity", "--profile", "default"):
+                    CmdResult(0, '{"Account":"123"}\n'),
+                ("aws", "s3", "ls", "s3://my-bucket/", "--profile", "default"):
+                    CmdResult(0, "file.jar\n"),
+                ("mise", "run", "containers:up"): CmdResult(1, "", "compose error"),
+            },
+            prompts=["default", "us-west-2", "my-bucket", "8888", "notify"],
+            confirms=[True],
+        )
+        assert run_setup(ctx) == 0
+        out = output_text(ctx)
+        assert "container" in out.lower() and "fail" in out.lower()
+        assert "Setup complete" in out
+
+    def test_aws_too_old_full_flow(self):
+        """Scenario 3: aws-cli too old → exit 1."""
+        ctx = MockSetupContext(
+            tools={"mise", "aws", "podman", "swiftc"},
+            commands={
+                ("mise", "--version"): CmdResult(0, "2024.12.0\n"),
+                ("aws", "--version"): CmdResult(0, "aws-cli/2.7.0 Python/3.9\n"),
+                ("podman", "--version"): CmdResult(0, "podman version 5.0.0\n"),
+            },
+        )
+        assert run_setup(ctx) == 1
+
+    def test_sso_watcher_install_fails_continues(self):
+        """SSO watcher install fails → warns, setup continues."""
+        ctx = self._base_ctx(
+            extra_commands={
+                ("mise", "run", "sso-install"): CmdResult(1, "", "build error"),
+                ("aws", "configure", "get", "sso_session", "--profile", "default"):
+                    CmdResult(0, "my-sess\n"),
+                ("aws", "sts", "get-caller-identity", "--profile", "default"):
+                    CmdResult(0, '{"Account":"123"}\n'),
+                ("mise", "run", "containers:up"): CmdResult(0),
+            },
+            prompts=["default", "us-west-2", "my-bucket", "8888", "notify"],
+            confirms=[True],
+        )
+        assert run_setup(ctx) == 0
+        out = output_text(ctx)
+        assert "sso-install" in out.lower() or "watcher" in out.lower()
+
+    def test_full_auto_discover_flow(self):
+        """P2: Full run_setup with SSO auto-discover: login → accounts → roles → config."""
+        import json as _json
+        home = str(Path.home())
+        config_path = f"{home}/.aws/config"
+        accounts = [
+            {"accountId": "111111111111", "accountName": "dev-account"},
+            {"accountId": "222222222222", "accountName": "prod-account"},
+        ]
+        roles = [
+            {"roleName": "Admin", "accountId": "222222222222"},
+            {"roleName": "ReadOnly", "accountId": "222222222222"},
+        ]
+
+        ctx_ref = [None]
+
+        def _login_with_cache(cmd):
+            """Simulate SSO login writing a cache file."""
+            if "-c" in cmd:
+                cache_path = f"{home}/.aws/sso/cache/tok.json"
+                ctx_ref[0]._files[cache_path] = _json.dumps({
+                    "accessToken": "discover-token",
+                    "startUrl": "https://org.awsapps.com/start",
+                    "expiresAt": "2099-01-01T00:00:00Z",
+                })
+                return CmdResult(0)
+            return CmdResult(0, "Python 3.11.14\n")
+
+        ctx = self._base_ctx(
+            extra_commands={
+                # No SSO configured
+                ("aws", "configure", "get", "sso_session", "--profile", "myprof"):
+                    CmdResult(1),
+                ("aws", "configure", "get", "sso_account_id", "--profile", "myprof"):
+                    CmdResult(1),
+                # Login + discover
+                "python3": _login_with_cache,
+                "aws sso list-accounts": CmdResult(
+                    0, _json.dumps({"accountList": accounts})),
+                "aws sso list-account-roles": CmdResult(
+                    0, _json.dumps({"roleList": roles})),
+                # Post-configure: creds valid
+                ("aws", "sts", "get-caller-identity", "--profile", "myprof"):
+                    CmdResult(0, '{"Account":"222222222222"}\n'),
+                ("aws", "s3", "ls", "s3://my-bucket/", "--profile", "myprof"):
+                    CmdResult(0, "file.jar\n"),
+                ("mise", "run", "containers:up"): CmdResult(0),
+            },
+            extra_files={config_path: ""},
+            prompts=[
+                "myprof", "sa-east-1", "my-bucket", "8888", "notify",  # env
+                "https://org.awsapps.com/start", "us-east-1",          # SSO URL + region
+            ],
+            three_way=["yes"],       # configure SSO
+            choices=[1, 1],          # pick prod-account (idx 1), ReadOnly (idx 1)
+            confirms=[True],         # start containers
+        )
+        ctx_ref[0] = ctx
+
+        assert run_setup(ctx) == 0
+        out = output_text(ctx)
+        assert "Setup complete" in out
+        assert "prod-account" in out
+        assert "ReadOnly" in out
+        # SSO config written to ~/.aws/config
+        final_config = ctx._files.get(config_path, "")
+        assert "[profile myprof]" in final_config
+        assert "sso_account_id = 222222222222" in final_config
+        assert "sso_role_name = ReadOnly" in final_config

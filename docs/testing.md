@@ -24,7 +24,7 @@ tests/
 
 ## Test Coverage
 
-**401 passing tests** (22 s3proxy + 211 watcher + 52 monitor + 116 setup)
+**446 passing tests** (22 s3proxy + 211 watcher + 52 monitor + 161 setup)
 
 ### S3 Proxy Tests (`tests/unit/test_s3proxy.py`)
 
@@ -291,8 +291,35 @@ Uses `MockSetupContext` — subclass of `SetupContext` with in-memory filesystem
 **Print Summary — `TestPrintSummary`** (2 tests):
 - Port in output, commands in output
 
+**Read/Write AWS Config — `TestReadAwsConfig`** (2 tests):
+- Reads existing config, missing file returns empty
+
+**Write SSO Config — `TestWriteSsoConfig`** (5 tests):
+- New config, append to existing, duplicate profile, duplicate session, no existing file
+
+**Find SSO Access Token — `TestFindSsoAccessToken`** (7 tests):
+- Matching token, URL normalization, picks latest expiry, wrong URL, malformed JSON, empty cache, client registration ignored
+
+**SSO List Accounts — `TestSsoListAccounts`** (4 tests):
+- Success, command fails, bad JSON, missing key
+
+**SSO List Roles — `TestSsoListRoles`** (3 tests):
+- Success, command fails, bad JSON
+
+**Clear SSO Cache — `TestClearSsoCache`** (4 tests):
+- Removes client registrations, preserves access tokens, skips malformed, empty cache
+
+**Discover Account and Role — `TestDiscoverAccountAndRole`** (4 tests):
+- Token not found, no accounts, no roles, temp config always cleaned
+
+**Do SSO Login — `TestDoSsoLogin`** (3 tests):
+- Success, failure, command contains profile
+
 **Full Setup Flow — `TestRunSetup`** (6 tests):
 - Happy path, prereq fail early exit, no SSO flow, login needed flow, permissions denied exits 1, dialog timeout warns and continues
+
+**Setup Scenarios — `TestRunSetupScenarios`** (13 tests):
+- Docker fallback, keep existing .env, SSO login fails + empty account, expired creds + login fails, placeholder bucket, headless, mise fails, invalid SSO mode, legacy SSO, container start fail, AWS too old, SSO watcher install fails, full auto-discover flow
 
 ## Running Tests
 
