@@ -189,7 +189,7 @@ class SetupContext:
         if self._console:
             from rich.prompt import Prompt
             try:
-                value = Prompt.ask(f"  {text}", default=default,
+                value = Prompt.ask(f"  [cyan]>[/] {text}", default=default,
                                    console=self._console)
                 return value.strip() or default
             except EOFError:
@@ -205,7 +205,7 @@ class SetupContext:
         if self._console:
             from rich.prompt import Confirm
             try:
-                return Confirm.ask(f"  {text}", default=default,
+                return Confirm.ask(f"  [cyan]?[/] {text}", default=default,
                                    console=self._console)
             except EOFError:
                 return default
@@ -224,7 +224,7 @@ class SetupContext:
             from rich.prompt import Prompt
             try:
                 value = Prompt.ask(
-                    f"  {text}",
+                    f"  [cyan]?[/] {text}",
                     choices=["y", "n", "s"],
                     default="y",
                     console=self._console,
@@ -251,20 +251,27 @@ class SetupContext:
     def choose(self, items: list[str], label: str = "Choice") -> int:
         """Show numbered list, return 0-based index. Returns 0 on bad input."""
         if self._console:
+            from rich.panel import Panel
             from rich.table import Table
             from rich.prompt import IntPrompt
-            table = Table(show_header=False, box=None, padding=(0, 2))
-            table.add_column(style="bold cyan", justify="right", width=4)
-            table.add_column()
+            table = Table(show_header=False, box=None, padding=(0, 2, 0, 0))
+            table.add_column(style="dim", justify="right", width=3)
+            table.add_column(style="bold")
             for i, item in enumerate(items, 1):
                 table.add_row(str(i), item)
-            self._console.print(table)
+            self._console.print()
+            self._console.print(
+                Panel(table, title=f"[bold]{label}[/]",
+                      border_style="cyan", expand=False, padding=(1, 2))
+            )
             self._output.append("\n".join(
                 f"    {i}) {item}" for i, item in enumerate(items, 1)
             ))
             try:
-                idx = IntPrompt.ask(f"  {label}", default=1,
-                                    console=self._console) - 1
+                idx = IntPrompt.ask(
+                    f"  [cyan]>[/] {label}", default=1,
+                    console=self._console,
+                ) - 1
                 return idx if 0 <= idx < len(items) else 0
             except (EOFError, ValueError):
                 return 0
