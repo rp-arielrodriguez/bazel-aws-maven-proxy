@@ -19,6 +19,13 @@ from setup import (
     PrereqResult,
     SetupContext,
     SsoCheckResult,
+    _clear_sso_cache,
+    _discover_account_and_role,
+    _find_sso_access_token,
+    _read_aws_config,
+    _sso_list_accounts,
+    _sso_list_roles,
+    _write_sso_config,
     check_aws_version,
     check_credentials_valid,
     check_macos_permissions,
@@ -27,6 +34,7 @@ from setup import (
     configure_env,
     configure_sso,
     detect_tls_skip,
+    do_sso_login,
     first_login_and_validate,
     generate_env_content,
     install_sso_watcher,
@@ -1589,3 +1597,397 @@ class TestRunSetup:
         )
         assert run_setup(ctx) == 0
         assert any("timed out" in l for l in ctx._output)
+
+
+# ===================================================================
+# TestReadAwsConfig
+# ===================================================================
+
+class TestReadAwsConfig:
+    def test_reads_existing(self):
+        home = str(Path.home())
+        ctx = MockSetupContext(files={
+            f"{home}/.aws/config": "[profile foo]\nregion=us-east-1\n"
+        })
+        assert "[profile foo]" in _read_aws_config(ctx)
+
+    def test_missing_file(self):
+        ctx = MockSetupContext()
+        assert _read_aws_config(ctx) == ""
+
+
+# ===================================================================
+# TestWriteSsoConfig
+# ===================================================================
+
+class TestWriteSsoConfig:
+    def test_writes_new_config(self):
+        home = str(Path.home())
+        config_path = f"{home}/.aws/config"
+        ctx = MockSetupContext(files={config_path: ""})
+        ok = _write_sso_config(ctx, "dev", "dev-session",
+                               "https://org.awsapps.com/start",
+                               "us-east-1", "111111111111", "Admin")
+        assert ok is True
+        written = ctx._files[config_path]
+        assert "[profile dev]" in written
+        assert "sso_account_id = 111111111111" in written
+        assert "[sso-session dev-session]" in written
+        assert "sso_registration_scopes = sso:account:access" in written
+
+    def test_appends_to_existing(self):
+        home = str(Path.home())
+        config_path = f"{home}/.aws/config"
+        ctx = MockSetupContext(files={
+            config_path: "[profile old]\nregion=sa-east-1\n"
+        })
+        ok = _write_sso_config(ctx, "new", "new-sess",
+                               "https://org.awsapps.com/start",
+                               "us-east-1", "222", "ReadOnly")
+        assert ok is True
+        written = ctx._files[config_path]
+        assert "[profile old]" in written
+        assert "[profile new]" in written
+
+    def test_duplicate_profile_returns_false(self):
+        home = str(Path.home())
+        config_path = f"{home}/.aws/config"
+        ctx = MockSetupContext(files={
+            config_path: "[profile dev]\nsso_session = dev\n"
+        })
+        ok = _write_sso_config(ctx, "dev", "dev-new",
+                               "https://org.awsapps.com/start",
+                               "us-east-1", "111", "Admin")
+        assert ok is False
+        assert any("already exists" in m for m in ctx.get_output())
+
+    def test_duplicate_session_returns_false(self):
+        home = str(Path.home())
+        config_path = f"{home}/.aws/config"
+        ctx = MockSetupContext(files={
+            config_path: "[sso-session my-sess]\nsso_start_url = https://x\n"
+        })
+        ok = _write_sso_config(ctx, "newprof", "my-sess",
+                               "https://org.awsapps.com/start",
+                               "us-east-1", "111", "Admin")
+        assert ok is False
+
+    def test_no_existing_config_file(self):
+        """Config file doesn't exist yet — creates it."""
+        home = str(Path.home())
+        config_path = f"{home}/.aws/config"
+        ctx = MockSetupContext()  # no files
+        ok = _write_sso_config(ctx, "dev", "dev-sess",
+                               "https://org.awsapps.com/start",
+                               "us-east-1", "111", "Admin")
+        assert ok is True
+        assert config_path in ctx._files
+
+
+# ===================================================================
+# TestFindSsoAccessToken
+# ===================================================================
+
+class TestFindSsoAccessToken:
+    def _cache_file(self, name, **fields):
+        import json
+        home = str(Path.home())
+        path = f"{home}/.aws/sso/cache/{name}.json"
+        return path, json.dumps(fields)
+
+    def test_finds_matching_token(self):
+        path, content = self._cache_file("tok1",
+            accessToken="my-token",
+            startUrl="https://org.awsapps.com/start",
+            expiresAt="2099-01-01T00:00:00Z")
+        ctx = MockSetupContext(files={path: content})
+        token = _find_sso_access_token(ctx, "https://org.awsapps.com/start")
+        assert token == "my-token"
+
+    def test_url_normalization(self):
+        """start_url with trailing /# still matches."""
+        path, content = self._cache_file("tok1",
+            accessToken="tok",
+            startUrl="https://org.awsapps.com/start/#",
+            expiresAt="2099-01-01T00:00:00Z")
+        ctx = MockSetupContext(files={path: content})
+        assert _find_sso_access_token(ctx, "https://org.awsapps.com/start") == "tok"
+
+    def test_picks_latest_expiry(self):
+        p1, c1 = self._cache_file("old",
+            accessToken="old-tok",
+            startUrl="https://org.awsapps.com/start",
+            expiresAt="2024-01-01T00:00:00Z")
+        p2, c2 = self._cache_file("new",
+            accessToken="new-tok",
+            startUrl="https://org.awsapps.com/start",
+            expiresAt="2099-01-01T00:00:00Z")
+        ctx = MockSetupContext(files={p1: c1, p2: c2})
+        assert _find_sso_access_token(ctx, "https://org.awsapps.com/start") == "new-tok"
+
+    def test_wrong_url_no_match(self):
+        path, content = self._cache_file("tok1",
+            accessToken="tok",
+            startUrl="https://other.awsapps.com/start",
+            expiresAt="2099-01-01T00:00:00Z")
+        ctx = MockSetupContext(files={path: content})
+        assert _find_sso_access_token(ctx, "https://org.awsapps.com/start") == ""
+
+    def test_malformed_json_skipped(self):
+        home = str(Path.home())
+        bad_path = f"{home}/.aws/sso/cache/bad.json"
+        ctx = MockSetupContext(files={bad_path: "not json{"})
+        assert _find_sso_access_token(ctx, "https://org.awsapps.com/start") == ""
+
+    def test_empty_cache(self):
+        ctx = MockSetupContext()
+        assert _find_sso_access_token(ctx, "https://org.awsapps.com/start") == ""
+
+    def test_client_registration_ignored(self):
+        """Files without accessToken (OIDC registrations) are skipped."""
+        path, content = self._cache_file("reg",
+            clientId="cid", clientSecret="csec",
+            expiresAt="2099-01-01T00:00:00Z")
+        ctx = MockSetupContext(files={path: content})
+        assert _find_sso_access_token(ctx, "https://org.awsapps.com/start") == ""
+
+
+# ===================================================================
+# TestSsoListAccounts
+# ===================================================================
+
+class TestSsoListAccounts:
+    def test_success(self):
+        import json
+        accounts = [{"accountId": "111", "accountName": "dev"}]
+        ctx = MockSetupContext(commands={
+            "aws sso list-accounts": CmdResult(0, json.dumps({"accountList": accounts}))
+        })
+        result = _sso_list_accounts(ctx, "token", "us-east-1")
+        assert result == accounts
+
+    def test_command_fails(self):
+        ctx = MockSetupContext(commands={
+            "aws sso list-accounts": CmdResult(1, "", "unauthorized")
+        })
+        result = _sso_list_accounts(ctx, "token", "us-east-1")
+        assert result == []
+        assert any("list-accounts error" in m for m in ctx.get_output())
+
+    def test_bad_json(self):
+        ctx = MockSetupContext(commands={
+            "aws sso list-accounts": CmdResult(0, "not json{")
+        })
+        result = _sso_list_accounts(ctx, "token", "us-east-1")
+        assert result == []
+
+    def test_missing_key(self):
+        import json
+        ctx = MockSetupContext(commands={
+            "aws sso list-accounts": CmdResult(0, json.dumps({"other": []}))
+        })
+        result = _sso_list_accounts(ctx, "token", "us-east-1")
+        assert result == []
+
+
+# ===================================================================
+# TestSsoListRoles
+# ===================================================================
+
+class TestSsoListRoles:
+    def test_success(self):
+        import json
+        roles = [{"roleName": "Admin", "accountId": "111"}]
+        ctx = MockSetupContext(commands={
+            "aws sso list-account-roles": CmdResult(0, json.dumps({"roleList": roles}))
+        })
+        result = _sso_list_roles(ctx, "token", "111", "us-east-1")
+        assert result == roles
+
+    def test_command_fails(self):
+        ctx = MockSetupContext(commands={
+            "aws sso list-account-roles": CmdResult(1, "", "forbidden")
+        })
+        result = _sso_list_roles(ctx, "token", "111", "us-east-1")
+        assert result == []
+        assert any("list-roles error" in m for m in ctx.get_output())
+
+    def test_bad_json(self):
+        ctx = MockSetupContext(commands={
+            "aws sso list-account-roles": CmdResult(0, "invalid")
+        })
+        result = _sso_list_roles(ctx, "token", "111", "us-east-1")
+        assert result == []
+
+
+# ===================================================================
+# TestClearSsoCache
+# ===================================================================
+
+class TestClearSsoCache:
+    def test_removes_client_registrations(self):
+        import json
+        home = str(Path.home())
+        reg = f"{home}/.aws/sso/cache/reg.json"
+        ctx = MockSetupContext(files={
+            reg: json.dumps({"clientId": "cid", "clientSecret": "sec",
+                             "expiresAt": "2099-01-01"})
+        })
+        _clear_sso_cache(ctx)
+        assert reg in ctx._removed
+
+    def test_preserves_access_tokens(self):
+        import json
+        home = str(Path.home())
+        tok = f"{home}/.aws/sso/cache/token.json"
+        ctx = MockSetupContext(files={
+            tok: json.dumps({"accessToken": "at", "startUrl": "https://x",
+                             "expiresAt": "2099-01-01"})
+        })
+        _clear_sso_cache(ctx)
+        assert tok not in ctx._removed
+
+    def test_skips_malformed_files(self):
+        home = str(Path.home())
+        bad = f"{home}/.aws/sso/cache/bad.json"
+        ctx = MockSetupContext(files={bad: "not json"})
+        _clear_sso_cache(ctx)
+        assert bad not in ctx._removed
+
+    def test_empty_cache(self):
+        ctx = MockSetupContext()
+        _clear_sso_cache(ctx)  # no error
+        assert ctx._removed == []
+
+
+# ===================================================================
+# TestDiscoverAccountAndRole
+# ===================================================================
+
+class TestDiscoverAccountAndRole:
+    def _make_ctx(self, *, login_ok=True, token="", accounts=None,
+                  roles=None, ctx_ref=None):
+        """Build MockSetupContext for discover tests."""
+        import json
+        home = str(Path.home())
+        config_path = f"{home}/.aws/config"
+        cmds = {}
+
+        if login_ok and ctx_ref is not None:
+            cache_path = f"{home}/.aws/sso/cache/tok.json"
+            cache_content = json.dumps({
+                "accessToken": token or "test-token",
+                "startUrl": "https://org.awsapps.com/start",
+                "expiresAt": "2099-01-01T00:00:00Z",
+            })
+            def _login(cmd):
+                ctx_ref[0]._files[cache_path] = cache_content
+                return CmdResult(0)
+            cmds["python3"] = _login
+        else:
+            cmds["python3"] = CmdResult(0 if login_ok else 1, "", "login failed" if not login_ok else "")
+
+        if accounts is not None:
+            cmds["aws sso list-accounts"] = CmdResult(
+                0, json.dumps({"accountList": accounts}))
+        if roles is not None:
+            cmds["aws sso list-account-roles"] = CmdResult(
+                0, json.dumps({"roleList": roles}))
+
+        return cmds, config_path
+
+    def test_token_not_found(self):
+        """Login succeeds but no token in cache → fallback."""
+        home = str(Path.home())
+        config_path = f"{home}/.aws/config"
+        ctx = MockSetupContext(
+            commands={"python3": CmdResult(0)},  # login ok but no cache written
+            files={config_path: ""},
+        )
+        acct, role = _discover_account_and_role(
+            ctx, "dev", "https://org.awsapps.com/start", "us-east-1")
+        assert acct == ""
+        assert role == ""
+        assert any("Could not find SSO token" in m for m in ctx.get_output())
+
+    def test_no_accounts_found(self):
+        """Login + token ok but list-accounts returns empty."""
+        import json
+        ctx_ref = [None]
+        cmds, config_path = self._make_ctx(
+            login_ok=True, ctx_ref=ctx_ref, accounts=[])
+        ctx = MockSetupContext(commands=cmds, files={config_path: ""})
+        ctx_ref[0] = ctx
+        acct, role = _discover_account_and_role(
+            ctx, "dev", "https://org.awsapps.com/start", "us-east-1")
+        assert acct == ""
+        assert role == ""
+        assert any("No accounts" in m for m in ctx.get_output())
+
+    def test_no_roles_found(self):
+        """Account selected but list-roles returns empty."""
+        import json
+        accounts = [{"accountId": "111", "accountName": "dev"}]
+        ctx_ref = [None]
+        cmds, config_path = self._make_ctx(
+            login_ok=True, ctx_ref=ctx_ref, accounts=accounts, roles=[])
+        ctx = MockSetupContext(
+            commands=cmds, files={config_path: ""},
+            choices=[0])  # pick first account
+        ctx_ref[0] = ctx
+        acct, role = _discover_account_and_role(
+            ctx, "dev", "https://org.awsapps.com/start", "us-east-1")
+        assert acct == "111"
+        assert role == ""
+        assert any("No roles" in m for m in ctx.get_output())
+
+    def test_temp_config_always_cleaned(self):
+        """Temp config removed even when login fails."""
+        home = str(Path.home())
+        config_path = f"{home}/.aws/config"
+        ctx = MockSetupContext(
+            commands={"python3": CmdResult(1, "", "fail")},
+            files={config_path: "[profile existing]\n"},
+        )
+        _discover_account_and_role(
+            ctx, "dev", "https://org.awsapps.com/start", "us-east-1")
+        # Temp session cleaned from config
+        final_config = ctx._files.get(config_path, "")
+        assert "setup-tmp" not in final_config
+        assert "[profile existing]" in final_config
+
+
+# ===================================================================
+# TestDoSsoLogin
+# ===================================================================
+
+class TestDoSsoLogin:
+    def test_success(self):
+        ctx = MockSetupContext(
+            commands={"python3": CmdResult(0)},
+            repo_root=Path("/my/repo"),
+        )
+        assert do_sso_login(ctx, "dev") is True
+
+    def test_failure(self):
+        ctx = MockSetupContext(
+            commands={"python3": CmdResult(1, "", "error")},
+            repo_root=Path("/my/repo"),
+        )
+        assert do_sso_login(ctx, "dev") is False
+
+    def test_command_contains_profile(self):
+        """Verify the constructed command includes the profile name."""
+        called_with = []
+        def capture(cmd):
+            called_with.append(cmd)
+            return CmdResult(0)
+        ctx = MockSetupContext(
+            commands={"python3": capture},
+            repo_root=Path("/my/repo"),
+        )
+        do_sso_login(ctx, "my-profile")
+        assert len(called_with) == 1
+        cmd_str = " ".join(called_with[0])
+        assert "my-profile" in cmd_str
+        assert "run_aws_sso_login" in cmd_str
