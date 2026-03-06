@@ -350,7 +350,40 @@ def list_aws_profiles(ctx: SetupContext) -> list[str]:
     return re.findall(r"^\[profile\s+(.+?)\]", content, re.MULTILINE)
 
 
-def prompt_env_config(ctx: SetupContext) -> EnvConfig:
+def detect_tls_skip(ctx: SetupContext, engine: str) -> bool:
+    """Auto-detect whether TLS verification should be skipped.
+
+    Runs a test container image pull. If it fails with a certificate error
+    (x509, tls, certificate), enables skip automatically. Only relevant for
+    podman — Docker requires daemon-level CA trust configuration.
+    """
+    if engine != "podman":
+        return False
+
+    ctx.print("")
+    ctx.print("  Checking container registry connectivity...")
+    r = ctx.run_cmd(
+        ["podman", "pull", "--quiet", "docker.io/library/alpine:latest"],
+        timeout=30,
+    )
+    if r.ok:
+        ctx.ok("Container pull OK")
+        return False
+
+    stderr = (r.stderr or r.stdout or "").lower()
+    tls_indicators = ["x509", "certificate", "tls"]
+    if any(ind in stderr for ind in tls_indicators):
+        ctx.warn("TLS certificate error detected — enabling SKIP_TLS_VERIFY")
+        ctx.print("    (Corporate proxy likely intercepting HTTPS)")
+        return True
+
+    # Non-TLS failure (network, DNS, etc.) — don't auto-enable
+    ctx.warn(f"Container pull failed: {(r.stderr or r.stdout or '').strip()}")
+    ctx.print("    If this is a TLS/certificate issue, set SKIP_TLS_VERIFY=true in .env")
+    return False
+
+
+def prompt_env_config(ctx: SetupContext, container_engine: str = "") -> EnvConfig:
     """Interactively prompt for .env values."""
     profiles = list_aws_profiles(ctx)
     if profiles:
@@ -376,15 +409,7 @@ def prompt_env_config(ctx: SetupContext) -> EnvConfig:
         ctx.warn(f"Invalid mode '{config.sso_mode}', defaulting to 'notify'")
         config.sso_mode = "notify"
 
-    ctx.print("")
-    ctx.print("  Corporate proxy / TLS:")
-    ctx.print("    If your network proxy intercepts HTTPS and replaces certificates,")
-    ctx.print("    container image pulls may fail with x509 certificate errors.")
-    ctx.print("    Enabling this sets --tls-verify=false for podman.")
-    config.skip_tls_verify = ctx.confirm(
-        "Skip TLS verification for container pulls? (corporate proxy with custom certs)",
-        default=False,
-    )
+    config.skip_tls_verify = detect_tls_skip(ctx, container_engine)
 
     return config
 
@@ -428,7 +453,7 @@ SSO_PROACTIVE_REFRESH_MINUTES=30
 """
 
 
-def configure_env(ctx: SetupContext) -> EnvConfig:
+def configure_env(ctx: SetupContext, container_engine: str = "") -> EnvConfig:
     """Phase 2: Configure .env file. Returns the active config."""
     ctx.header("Configuring .env...")
 
@@ -444,7 +469,7 @@ def configure_env(ctx: SetupContext) -> EnvConfig:
     config = EnvConfig()
     if write_env:
         ctx.print("")
-        config = prompt_env_config(ctx)
+        config = prompt_env_config(ctx, container_engine)
         content = generate_env_content(config)
         ctx.write_file(env_path, content)
         ctx.ok("Wrote .env")
@@ -1115,7 +1140,8 @@ def run_setup(ctx: SetupContext) -> int:
     ctx.print("")
 
     # Phase 2: .env
-    config = configure_env(ctx)
+    engine = prereqs.container.name if prereqs.container else ""
+    config = configure_env(ctx, engine)
 
     # Phase 3: mise install
     install_tools(ctx)

@@ -24,7 +24,7 @@ tests/
 
 ## Test Coverage
 
-**390 passing tests** (22 s3proxy + 211 watcher + 52 monitor + 105 setup)
+**401 passing tests** (22 s3proxy + 211 watcher + 52 monitor + 116 setup)
 
 ### S3 Proxy Tests (`tests/unit/test_s3proxy.py`)
 
@@ -235,9 +235,14 @@ Uses `MockSetupContext` — subclass of `SetupContext` with in-memory filesystem
 **AWS Profiles — `TestListAwsProfiles`** (4 tests):
 - Multiple profiles, no config file, empty, default-section only
 
-**Env Config Prompts — `TestPromptEnvConfig`** (6 tests):
+**Env Config Prompts — `TestPromptEnvConfig`** (9 tests):
 - Defaults, custom values, invalid SSO mode, profiles shown
-- TLS skip default false, TLS skip enabled
+- TLS auto-detect: no engine, pull ok, x509 error, docker skipped, non-TLS failure
+
+**TLS Auto-Detection — `TestDetectTlsSkip`** (8 tests):
+- No engine, docker skipped, podman pull ok
+- x509 / tls / certificate keyword detection
+- Non-TLS failure, error in stdout
 
 **Env Content Generation — `TestGenerateEnvContent`** (6 tests):
 - Default config, custom, hardcoded values, commented engine

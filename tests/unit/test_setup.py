@@ -26,6 +26,7 @@ from setup import (
     check_sso_configuration,
     configure_env,
     configure_sso,
+    detect_tls_skip,
     first_login_and_validate,
     generate_env_content,
     install_sso_watcher,
@@ -439,18 +440,108 @@ class TestPromptEnvConfig:
         assert "foo" in out
         assert "bar" in out
 
-    def test_skip_tls_verify_default_false(self):
+    def test_tls_skip_false_no_engine(self):
+        """No container engine → skip_tls_verify stays False."""
         ctx = MockSetupContext(prompts=["", "", "", "", ""])
         config = prompt_env_config(ctx)
         assert config.skip_tls_verify is False
 
-    def test_skip_tls_verify_enabled(self):
+    def test_tls_skip_false_pull_ok(self):
+        """Podman pull succeeds → skip_tls_verify stays False."""
         ctx = MockSetupContext(
             prompts=["", "", "", "", ""],
-            confirms=[True],
+            commands={"podman pull": CmdResult(0)},
         )
-        config = prompt_env_config(ctx)
+        config = prompt_env_config(ctx, container_engine="podman")
+        assert config.skip_tls_verify is False
+
+    def test_tls_skip_true_x509_error(self):
+        """Podman pull fails with x509 → skip_tls_verify auto-enabled."""
+        ctx = MockSetupContext(
+            prompts=["", "", "", "", ""],
+            commands={
+                "podman pull": CmdResult(
+                    1, "", "x509: certificate signed by unknown authority"
+                ),
+            },
+        )
+        config = prompt_env_config(ctx, container_engine="podman")
         assert config.skip_tls_verify is True
+
+    def test_tls_skip_false_docker(self):
+        """Docker engine → detection skipped, stays False."""
+        ctx = MockSetupContext(prompts=["", "", "", "", ""])
+        config = prompt_env_config(ctx, container_engine="docker")
+        assert config.skip_tls_verify is False
+
+    def test_tls_skip_false_non_tls_failure(self):
+        """Podman pull fails with non-TLS error → stays False."""
+        ctx = MockSetupContext(
+            prompts=["", "", "", "", ""],
+            commands={
+                "podman pull": CmdResult(1, "", "connection refused"),
+            },
+        )
+        config = prompt_env_config(ctx, container_engine="podman")
+        assert config.skip_tls_verify is False
+
+
+# ===================================================================
+# TestDetectTlsSkip
+# ===================================================================
+
+class TestDetectTlsSkip:
+    def test_no_engine(self):
+        ctx = MockSetupContext()
+        assert detect_tls_skip(ctx, "") is False
+
+    def test_docker_skips_detection(self):
+        ctx = MockSetupContext()
+        assert detect_tls_skip(ctx, "docker") is False
+
+    def test_podman_pull_ok(self):
+        ctx = MockSetupContext(commands={"podman pull": CmdResult(0)})
+        assert detect_tls_skip(ctx, "podman") is False
+        assert any("pull OK" in m for m in ctx.get_output())
+
+    def test_podman_x509_error(self):
+        ctx = MockSetupContext(commands={
+            "podman pull": CmdResult(
+                1, "", "x509: certificate signed by unknown authority"
+            ),
+        })
+        assert detect_tls_skip(ctx, "podman") is True
+        out = output_text(ctx)
+        assert "TLS certificate error" in out
+
+    def test_podman_tls_error(self):
+        ctx = MockSetupContext(commands={
+            "podman pull": CmdResult(1, "", "tls: handshake failure"),
+        })
+        assert detect_tls_skip(ctx, "podman") is True
+
+    def test_podman_certificate_keyword(self):
+        ctx = MockSetupContext(commands={
+            "podman pull": CmdResult(
+                1, "", "certificate verify failed"
+            ),
+        })
+        assert detect_tls_skip(ctx, "podman") is True
+
+    def test_podman_non_tls_failure(self):
+        ctx = MockSetupContext(commands={
+            "podman pull": CmdResult(1, "", "connection refused"),
+        })
+        assert detect_tls_skip(ctx, "podman") is False
+        out = output_text(ctx)
+        assert "SKIP_TLS_VERIFY=true" in out
+
+    def test_podman_error_in_stdout(self):
+        """Error message in stdout (not stderr) still detected."""
+        ctx = MockSetupContext(commands={
+            "podman pull": CmdResult(1, "x509: certificate problem", ""),
+        })
+        assert detect_tls_skip(ctx, "podman") is True
 
 
 # ===================================================================

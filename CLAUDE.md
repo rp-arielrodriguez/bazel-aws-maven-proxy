@@ -229,7 +229,7 @@ maven_install(
 
 Run tests:
 ```bash
-pytest              # All tests (390)
+pytest              # All tests (401)
 ./run_tests.sh      # Helper script
 ```
 

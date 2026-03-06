@@ -57,7 +57,7 @@ mise run setup
 This interactive wizard will:
 - Verify prerequisites (aws, podman/docker, swiftc)
 - Prompt for AWS profile, region, S3 bucket, and create `.env`
-- Ask whether you're behind a corporate proxy that intercepts HTTPS (sets `SKIP_TLS_VERIFY`)
+- Auto-detect corporate proxy TLS interception via test container pull (sets `SKIP_TLS_VERIFY`)
 - Configure SSO if your profile isn't set up yet (logs in, auto-discovers accounts/roles)
 - Install Python via mise
 - Build the login webview and install the SSO watcher (launchd)
@@ -264,7 +264,7 @@ mise run tls-skip:enable
 mise run containers:restart
 ```
 
-Or set it during initial setup when the wizard asks about corporate proxies. To configure manually:
+The setup wizard auto-detects this via a test pull and enables it automatically. To configure manually:
 
 ```bash
 mise run config:set SKIP_TLS_VERIFY=true
@@ -279,13 +279,13 @@ mise run containers:restart
 |----------|-------------|
 | [docs/sso-watcher.md](docs/sso-watcher.md) | SSO watcher architecture and internals |
 | [docs/state-machine.md](docs/state-machine.md) | State diagrams (Mermaid) for modes, signals, cooldown |
-| [docs/testing.md](docs/testing.md) | Test structure and coverage (390 tests) |
+| [docs/testing.md](docs/testing.md) | Test structure and coverage (401 tests) |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute |
 
 ## Testing
 
 ```bash
-pytest              # Run all 390 tests
+pytest              # Run all 401 tests
 ./run_tests.sh      # Helper script
 ```
 
