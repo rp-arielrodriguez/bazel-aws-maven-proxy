@@ -959,7 +959,8 @@ def check_credentials_valid(ctx: SetupContext, profile: str) -> bool:
 def do_sso_login(ctx: SetupContext, profile: str) -> bool:
     """Perform SSO login using watcher's run_aws_sso_login.
 
-    Returns True on success.
+    Returns True on success. Runs interactive (no capture) so errors
+    and webview prompts are visible to the user.
     """
     repo = str(ctx.repo_root)
     r = ctx.run_cmd([
@@ -967,7 +968,7 @@ def do_sso_login(ctx: SetupContext, profile: str) -> bool:
         f"import os, sys; sys.path.insert(0, os.path.join({repo!r}, 'sso-watcher')); "
         f"from watcher import run_aws_sso_login; "
         f"sys.exit(run_aws_sso_login({profile!r}))"
-    ], timeout=180)
+    ], interactive=True, timeout=180)
     return r.ok
 
 
