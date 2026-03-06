@@ -56,7 +56,7 @@ class PrereqResult:
 class EnvConfig:
     """User-provided .env configuration."""
     aws_profile: str = "default"
-    aws_region: str = "us-west-2"
+    aws_region: str = "sa-east-1"
     s3_bucket: str = "your-maven-bucket"
     proxy_port: str = "8888"
     sso_mode: str = "notify"
@@ -772,15 +772,10 @@ sso_registration_scopes = sso:account:access
 
     ctx.print("")
     ctx.print("  Logging in to SSO to discover accounts and roles...")
-    ctx.print("  A browser or webview will open for authentication.")
+    ctx.print("  The sandboxed webview will open for authentication.")
     ctx.print("")
 
-    r = ctx.run_cmd(
-        ["aws", "sso", "login", "--profile", session_name],
-        interactive=True, timeout=300,
-    )
-
-    if not r.ok:
+    if not do_sso_login(ctx, session_name):
         ctx.warn("SSO login failed — falling back to manual entry")
         # Clean up temp config
         _remove_temp_config(ctx, config_path, session_name)

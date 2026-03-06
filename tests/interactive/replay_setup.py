@@ -431,9 +431,9 @@ def scenario_sso_not_configured():
             CmdResult(1, "", "not set"),
         ("aws", "configure", "get", "sso_account_id", "--profile", "default"):
             CmdResult(1, "", "not set"),
-        # SSO login fails → triggers manual fallback
-        ("aws", "sso", "login", "--profile", "default-setup-tmp"):
-            CmdResult(1, "", "login failed"),
+        # do_sso_login (webview) fails → triggers manual fallback
+        "python3": lambda cmd: CmdResult(1, "", "login failed") if "-c" in cmd
+                   else CmdResult(0, "Python 3.11.14\n"),
     }
 
     ctx = ReplayContext(

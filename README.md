@@ -204,7 +204,7 @@ Environment variables in `.env`:
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `AWS_PROFILE` | AWS CLI profile name (must exist in `~/.aws/config` with SSO) | `default` |
-| `AWS_REGION` | AWS region for S3 | `us-west-2` |
+| `AWS_REGION` | AWS region for S3 | `sa-east-1` |
 | `S3_BUCKET_NAME` | Maven S3 bucket name | Required |
 | `PROXY_PORT` | Local proxy port | `8888` |
 | `REFRESH_INTERVAL` | Credential refresh check (ms) | `60000` |

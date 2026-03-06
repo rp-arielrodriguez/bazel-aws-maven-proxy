@@ -404,7 +404,7 @@ class TestPromptEnvConfig:
         ctx = MockSetupContext(prompts=["", "", "", "", ""])
         config = prompt_env_config(ctx)
         assert config.aws_profile == "default"
-        assert config.aws_region == "us-west-2"
+        assert config.aws_region == "sa-east-1"
         assert config.s3_bucket == "your-maven-bucket"
         assert config.proxy_port == "8888"
         assert config.sso_mode == "notify"
@@ -461,7 +461,7 @@ class TestGenerateEnvContent:
     def test_default_config(self):
         content = generate_env_content(EnvConfig())
         assert 'AWS_PROFILE="default"' in content
-        assert 'AWS_REGION="us-west-2"' in content
+        assert 'AWS_REGION="sa-east-1"' in content
         assert 'S3_BUCKET_NAME="your-maven-bucket"' in content
         assert 'PROXY_PORT="8888"' in content
         assert 'SSO_LOGIN_MODE="notify"' in content
@@ -541,7 +541,7 @@ class TestParseExistingEnv:
         ctx = MockSetupContext(files={str(env_path): env_content})
         cfg = parse_existing_env(ctx, env_path)
         assert cfg.aws_profile == "active"
-        assert cfg.aws_region == "us-west-2"  # default, comment was ignored
+        assert cfg.aws_region == "sa-east-1"  # default, comment was ignored
 
     def test_missing_file(self):
         env_path = Path("/fake/nonexistent/.env")
@@ -549,7 +549,7 @@ class TestParseExistingEnv:
         cfg = parse_existing_env(ctx, env_path)
         # Should return defaults
         assert cfg.aws_profile == "default"
-        assert cfg.aws_region == "us-west-2"
+        assert cfg.aws_region == "sa-east-1"
 
     def test_partial_env(self):
         env_content = 'AWS_PROFILE="custom"\n'
@@ -557,7 +557,7 @@ class TestParseExistingEnv:
         ctx = MockSetupContext(files={str(env_path): env_content})
         cfg = parse_existing_env(ctx, env_path)
         assert cfg.aws_profile == "custom"
-        assert cfg.aws_region == "us-west-2"  # default
+        assert cfg.aws_region == "sa-east-1"  # default
         assert cfg.s3_bucket == "your-maven-bucket"  # default
 
     def test_skip_tls_verify_true(self):
@@ -932,7 +932,8 @@ class TestConfigureSso:
         """Commands for auto-discover flow (login + list accounts/roles)."""
         import json as _json
         cmds = dict(self._not_configured())
-        cmds[("aws", "sso", "login", "--profile", "dev-setup-tmp")] = (
+        # do_sso_login runs python3 -c "...run_aws_sso_login('dev-setup-tmp')..."
+        cmds["python3"] = (
             CmdResult(0) if login_ok else CmdResult(1, "", "login failed")
         )
         if accounts is not None:
