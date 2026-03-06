@@ -579,7 +579,7 @@ def check_macos_permissions(ctx: SetupContext) -> dict:
         ctx.print("")
         return result
 
-    # Dialog display — verifies the app can show UI
+    # Dialog display — verifies the app can show UI (non-fatal)
     r = ctx.run_cmd([
         "osascript", "-e",
         'display dialog "Setup complete — SSO watcher permissions verified." '
@@ -589,13 +589,11 @@ def check_macos_permissions(ctx: SetupContext) -> dict:
         ctx.ok("Dialog permissions")
         result["dialog"] = True
     elif "timeout" in r.stderr:
-        ctx.fail("Dialog permission timed out")
-        ctx.print("       Re-run setup and click OK when prompted")
-        result["failed"] = True
+        ctx.warn("Dialog permission timed out — SSO login dialogs may not appear")
+        ctx.print("       You can grant later in: System Settings → Privacy & Security → Automation")
     else:
-        ctx.fail("Dialog display denied")
+        ctx.warn("Dialog display denied — SSO login dialogs may not appear")
         ctx.print("       Grant in: System Settings → Privacy & Security → Automation")
-        result["failed"] = True
 
     ctx.print("")
     return result
@@ -716,6 +714,9 @@ def _sso_list_accounts(ctx: SetupContext, token: str, sso_region: str) -> list[d
         "--region", sso_region,
     ])
     if not r.ok:
+        detail = (r.stderr or r.stdout or "").strip()
+        if detail:
+            ctx.print(f"  list-accounts error: {detail[:200]}")
         return []
     try:
         data = _json.loads(r.stdout)
@@ -734,6 +735,9 @@ def _sso_list_roles(ctx: SetupContext, token: str, account_id: str, sso_region: 
         "--region", sso_region,
     ])
     if not r.ok:
+        detail = (r.stderr or r.stdout or "").strip()
+        if detail:
+            ctx.print(f"  list-roles error: {detail[:200]}")
         return []
     try:
         data = _json.loads(r.stdout)
@@ -804,7 +808,11 @@ sso_registration_scopes = sso:account:access
     # Find access token from cache
     token = _find_sso_access_token(ctx, start_url)
     if not token:
-        ctx.warn("Could not find SSO token after login — falling back to manual entry")
+        # Diagnostic: list cache files so user can report what's there
+        cache_dir = Path.home() / ".aws" / "sso" / "cache"
+        files = ctx.glob_files(str(cache_dir / "*.json"))
+        ctx.warn(f"Could not find SSO token after login (cache files: {len(files)})")
+        ctx.warn("Falling back to manual entry")
         _remove_temp_config(ctx, config_path, session_name)
         return ("", "")
 

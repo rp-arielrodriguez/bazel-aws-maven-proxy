@@ -287,7 +287,7 @@ Uses `MockSetupContext` — subclass of `SetupContext` with in-memory filesystem
 - Port in output, commands in output
 
 **Full Setup Flow — `TestRunSetup`** (6 tests):
-- Happy path, prereq fail early exit, no SSO flow, login needed flow, permissions denied exits 1, permissions timeout exits 1
+- Happy path, prereq fail early exit, no SSO flow, login needed flow, permissions denied exits 1, dialog timeout warns and continues
 
 ## Running Tests
 

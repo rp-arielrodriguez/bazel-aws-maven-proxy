@@ -313,7 +313,8 @@ Most phases after prerequisites use **warn-and-continue** — failures produce w
 | 2. .env | — | Always succeeds |
 | 3. mise install | Command fails | Warn, continue |
 | 4. sso-install | Build/load fails | Warn, continue |
-| 5. Permissions | Denied / timeout (60s) | **Exit 1** — watcher can't function |
+| 5. Permissions | System Events denied | **Exit 1** — watcher can't function |
+|                | Dialog denied/timeout | Warn, continue |
 | 6. SSO config | Missing required field / duplicate profile | Warn, continue |
 | 7. Login | Login fails / S3 inaccessible | Warn, continue |
 | 8. Containers | compose up fails | Warn, continue |

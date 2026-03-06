@@ -762,7 +762,7 @@ class TestCheckMacosPermissions:
         assert r["system_events"] is False
         assert any("timed out" in l for l in ctx._output)
 
-    def test_dialog_denied_fails_setup(self):
+    def test_dialog_denied_warns(self):
         ctx = MockSetupContext(
             env={"DISPLAY": ":0"},
             commands={
@@ -771,11 +771,11 @@ class TestCheckMacosPermissions:
             },
         )
         r = check_macos_permissions(ctx)
-        assert r["failed"] is True
+        assert r["failed"] is False  # non-fatal
         assert r["system_events"] is True
         assert r["dialog"] is False
 
-    def test_dialog_timeout_fails_setup(self):
+    def test_dialog_timeout_warns(self):
         ctx = MockSetupContext(
             env={"DISPLAY": ":0"},
             commands={
@@ -784,7 +784,7 @@ class TestCheckMacosPermissions:
             },
         )
         r = check_macos_permissions(ctx)
-        assert r["failed"] is True
+        assert r["failed"] is False  # non-fatal
         assert r["dialog"] is False
         assert any("timed out" in l for l in ctx._output)
 
@@ -1477,8 +1477,8 @@ class TestRunSetup:
         )
         assert run_setup(ctx) == 1
 
-    def test_permissions_timeout_exits_1(self):
-        """GUI session + dialog timeout → setup fails."""
+    def test_permissions_dialog_timeout_continues(self):
+        """GUI session + dialog timeout → warns but setup continues."""
         osascript_se = (
             "osascript", "-e",
             'tell application "System Events" to return name of current user'
@@ -1496,4 +1496,5 @@ class TestRunSetup:
             },
             env={"TERM_PROGRAM": "Terminal"},
         )
-        assert run_setup(ctx) == 1
+        assert run_setup(ctx) == 0
+        assert any("timed out" in l for l in ctx._output)
