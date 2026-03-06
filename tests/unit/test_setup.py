@@ -1246,9 +1246,9 @@ class TestConfigureSso:
         )
         ctx_ref[0] = ctx
         configure_sso(ctx, "dev")
-        # Both stale registration and old token removed
+        # Stale client registration removed, access tokens preserved
         assert stale_path in ctx._removed
-        assert old_token_path in ctx._removed
+        assert old_token_path not in ctx._removed
 
 
 # ===================================================================

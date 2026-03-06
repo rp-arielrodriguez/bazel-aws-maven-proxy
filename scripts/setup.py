@@ -907,18 +907,27 @@ def _sso_list_roles(ctx: SetupContext, token: str, account_id: str,
 
 
 def _clear_sso_cache(ctx: SetupContext) -> None:
-    """Remove all cached OIDC files to force fresh registration and login.
+    """Remove stale OIDC client registrations to force fresh PKCE registration.
 
-    Clears both client registrations (stale device-code grants from
-    CLI < 2.22.0) and access tokens (which may lack sso:account:access
-    scope needed for list-accounts/list-roles). The fresh login with
-    our temp profile (which has sso_registration_scopes) creates a
-    properly scoped token.
+    Only removes client registration files (those with 'clientId' but no
+    'accessToken'). Access tokens for existing profiles are preserved so
+    re-running setup doesn't invalidate a working session.
+
+    Stale registrations from CLI < 2.22.0 use device-code grant type
+    instead of PKCE, which breaks the webview login flow.
     """
+    import json as _json
     cache_dir = Path.home() / ".aws" / "sso" / "cache"
     pattern = str(cache_dir / "*.json")
     for path_str in ctx.glob_files(pattern):
-        ctx.remove_file(Path(path_str))
+        try:
+            content = ctx.read_file(Path(path_str))
+            data = _json.loads(content)
+            # Client registrations have clientId; access tokens have accessToken
+            if "clientId" in data and "accessToken" not in data:
+                ctx.remove_file(Path(path_str))
+        except (OSError, _json.JSONDecodeError):
+            continue
 
 
 def _discover_account_and_role(
