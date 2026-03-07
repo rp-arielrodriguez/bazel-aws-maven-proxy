@@ -39,14 +39,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY app.py .
+COPY entrypoint.py .
 
-# Create data directory for caching
-RUN mkdir -p /data
-
-# Run as non-root user with home directory for AWS config
-RUN useradd --create-home --system appuser && chown appuser:appuser /data
-USER appuser
-ENV HOME=/home/appuser
+# Create data directory and non-root user
+RUN mkdir -p /data \
+    && useradd --create-home --system appuser \
+    && chown appuser:appuser /data
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
@@ -59,6 +57,6 @@ EXPOSE 8888
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
   CMD curl -f http://localhost:${PROXY_PORT:-8888}/healthz || exit 1
 
-# Run the application with gunicorn (production WSGI server)
-# Shell form so $PROXY_PORT is expanded at runtime
-CMD gunicorn --bind "0.0.0.0:${PROXY_PORT:-8888}" --workers 2 --threads 4 --timeout 120 --access-logfile - app:app
+# Entrypoint fixes /data volume ownership then drops to appuser.
+# Runs as root so chown works on pre-existing named volumes.
+ENTRYPOINT ["python3", "entrypoint.py"]
