@@ -382,6 +382,32 @@ class TestLastRun:
         assert watcher.read_last_run() is None
 
 
+class TestClearCooldown:
+
+    def test_removes_last_run_file(self, watcher_state):
+        watcher_state["last_run"].write_text(f"{time.time()}\n")
+        watcher._clear_cooldown()
+        assert not watcher_state["last_run"].exists()
+
+    def test_no_error_when_missing(self, watcher_state):
+        assert not watcher_state["last_run"].exists()
+        watcher._clear_cooldown()  # should not raise
+
+    def test_main_clears_cooldown_on_startup(self, watcher_state):
+        """Stale cooldown from previous watcher run doesn't block first signal."""
+        watcher_state["last_run"].write_text(f"{time.time()}\n")
+        write_signal(watcher_state["signal_file"], profile="dev")
+        with patch.object(watcher, 'read_mode', return_value='notify'), \
+             patch.object(watcher, 'POLL_SECONDS', 0), \
+             patch.object(watcher, 'COOLDOWN_SECONDS', 9999), \
+             patch.object(watcher, '_run_notify_login', return_value="success") as mock_notify, \
+             patch('time.sleep', side_effect=_stop_after(2)):
+            watcher.main()
+        # Signal was handled despite stale cooldown — because main() cleared it on startup
+        mock_notify.assert_called_once_with("dev")
+        assert not watcher_state["signal_file"].exists()
+
+
 # ---------------------------------------------------------------------------
 # Main loop integration tests
 # ---------------------------------------------------------------------------

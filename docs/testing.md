@@ -24,7 +24,7 @@ tests/
 
 ## Test Coverage
 
-**465 passing tests** (22 s3proxy + 211 watcher + 52 monitor + 180 setup)
+**468 passing tests** (22 s3proxy + 214 watcher + 52 monitor + 180 setup)
 
 ### S3 Proxy Tests (`tests/unit/test_s3proxy.py`)
 
@@ -71,6 +71,9 @@ tests/
 
 **Last Run Tracking — `TestLastRun`** (3 tests):
 - Write and read timestamps, missing/corrupt file
+
+**Clear Cooldown — `TestClearCooldown`** (3 tests):
+- Removes last-run file, no error when missing, main() clears stale cooldown on startup
 
 **Main Loop — `TestMainLoopNotifyMode`** (8 tests):
 - Refresh success clears signal, dismiss keeps signal

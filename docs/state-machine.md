@@ -160,10 +160,11 @@ Two separate throttle mechanisms.
 ```mermaid
 stateDiagram-v2
     direction LR
-    [*] --> ready
+    [*] --> ready : startup clears cooldown
     ready --> throttled : success or suppress or dismiss or failed+creds_valid
     throttled --> ready : 600s elapsed
     throttled --> ready : sso-login or sso-logout clears file
+    throttled --> ready : watcher restart clears file
 ```
 
 **Snooze** — in-signal (`nextAttemptAfter`), blocks only the current signal:
@@ -182,7 +183,7 @@ stateDiagram-v2
 | File | Written by | Read by | Purpose |
 |------|-----------|---------|---------|
 | `login-required.json` | monitor, sso-login | watcher | Trigger: credentials expired |
-| `last-login-at.txt` | watcher on success/suppress/dismiss/failed+creds valid | watcher, sso-status | Cooldown: prevent spam |
+| `last-login-at.txt` | watcher on success/suppress/dismiss/failed+creds valid (cleared on startup) | watcher, sso-status | Cooldown: prevent spam |
 | `mode` | sso-mode:* | watcher, sso-status, sso-login, sso-logout | Runtime mode override |
 | `login.lock/` | watcher via mkdir | watcher | Concurrency: single login |
 
@@ -195,6 +196,7 @@ Machine-readable transition table for the main watcher loop:
 ```
 STATE                | CONDITION                          | ACTION                        | NEXT
 ---------------------|------------------------------------|------------------------------ |------------------
+startup              | watcher launched                   | clear cooldown file           | polling
 polling              | no signal file                     | sleep                         | polling
 polling              | signal + cooldown active           | sleep                         | polling
 polling              | signal + snooze active             | sleep                         | polling

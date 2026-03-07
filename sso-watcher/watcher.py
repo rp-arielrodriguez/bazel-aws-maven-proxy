@@ -122,6 +122,19 @@ def write_last_run(ts: float) -> None:
     LAST_RUN_FILE.write_text(f"{ts}\n")
 
 
+def _clear_cooldown() -> None:
+    """Remove last-login-at so cooldown doesn't block the first signal check.
+
+    Called at watcher startup — previous dismiss/timeout cooldown should not
+    survive a restart, otherwise ``mise run start`` with expired creds sits
+    idle until the old cooldown elapses.
+    """
+    try:
+        LAST_RUN_FILE.unlink()
+    except FileNotFoundError:
+        pass
+
+
 LOCK_STALE_SECONDS = 300  # 5 min — lock older than this is stale
 
 
@@ -1245,6 +1258,9 @@ def main() -> int:
     log.info(f"mode={read_mode()}, cooldown={COOLDOWN_SECONDS}s, poll={POLL_SECONDS}s")
     if PROACTIVE_REFRESH_MINUTES > 0:
         log.info(f"proactive refresh: {PROACTIVE_REFRESH_MINUTES}min before expiry")
+
+    # Clear stale cooldown from previous run so we respond to signals immediately
+    _clear_cooldown()
 
     last_proactive_check: float = 0
     # Check token expiry every 60s (not every poll cycle)
