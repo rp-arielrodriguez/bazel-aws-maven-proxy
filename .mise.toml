@@ -40,8 +40,8 @@ description = "Uninstall complete system (containers + SSO watcher)"
 depends = ["containers:down", "sso-uninstall"]
 
 [tasks."containers:up"]
-description = "Start container services (s3proxy + sso-monitor)"
-run = "source scripts/container-engine.sh && $COMPOSE_CMD up -d"
+description = "Start container services (rebuilds images if sources changed)"
+run = "source scripts/container-engine.sh && $COMPOSE_CMD up -d --build"
 
 [tasks."containers:down"]
 description = "Stop container services"
@@ -52,8 +52,12 @@ description = "View container service logs"
 run = "bash scripts/docker-logs.sh"
 
 [tasks."containers:restart"]
-description = "Restart container services"
-run = "source scripts/container-engine.sh && $COMPOSE_CMD restart"
+description = "Restart container services (rebuilds images if sources changed)"
+run = "source scripts/container-engine.sh && $COMPOSE_CMD up -d --build --force-recreate"
+
+[tasks."containers:rebuild"]
+description = "Force full rebuild of container images (no cache)"
+run = "source scripts/container-engine.sh && $COMPOSE_CMD build --no-cache && $COMPOSE_CMD up -d --force-recreate"
 
 [tasks.sso-install]
 description = "Install SSO watcher as macOS launchd user agent"
