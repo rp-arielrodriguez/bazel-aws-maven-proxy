@@ -2224,14 +2224,17 @@ class TestRunNotifyLogin:
             mock_aws.kill.assert_called()
 
     def test_credential_check_during_poll_returns_success(self):
-        """_check_credentials_valid finds valid creds during poll → success."""
+        """_check_credentials_valid finds valid creds during poll → grace period → success."""
         mock_webview = MagicMock()
         mock_webview.stdout = iter(["SSO_ACTION:refresh\n"])
         mock_webview.stdin = MagicMock()
         mock_webview.poll.return_value = None
 
         mock_aws = MagicMock()
-        mock_aws.poll.return_value = None  # aws hangs
+        mock_aws.poll.return_value = None  # aws hangs during poll
+        mock_aws.returncode = 0  # but finishes ok during grace wait
+        mock_aws.stdout = MagicMock()
+        mock_aws.stdout.read.return_value = ""
         url = "https://device.sso.us-east-1.amazonaws.com/?user_code=ABCD&redirect_uri=http://127.0.0.1:2456"
 
         call_count = [0]
@@ -2251,7 +2254,6 @@ class TestRunNotifyLogin:
              patch('time.sleep'):
             result = watcher._run_notify_login("prof")
             assert result == "success"
-            mock_aws.kill.assert_called()
 
     def test_webview_exits_during_auth_aws_finishes(self):
         """Webview exits during auth, aws finishes within grace period → success."""

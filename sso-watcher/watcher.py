@@ -215,25 +215,50 @@ def _get_sso_session_config(profile: str) -> dict:
     }
 
 
-def _find_sso_cache_file(start_url: str) -> dict | None:
+def _find_sso_cache_file(start_url: str, session_name: str | None = None) -> dict | None:
     """
-    Find the SSO cache file matching a start URL.
+    Find the SSO cache file for a specific profile.
 
-    Scans ~/.aws/sso/cache/*.json for a file with a matching startUrl
-    that contains accessToken, refreshToken, clientId, clientSecret.
+    The AWS CLI computes the token cache filename as sha1(session_name)
+    for modern profiles or sha1(start_url) for legacy ones.  When
+    session_name is provided, looks up the exact file instead of
+    scanning — this avoids picking up tokens from other sessions
+    (e.g. setup-tmp sessions) that share the same startUrl.
+
+    Falls back to scanning by startUrl if the exact file doesn't exist
+    or session_name is not provided.
 
     Returns the parsed cache data dict, or None if not found.
     """
+    import hashlib
+
+    # Direct lookup by session_name (preferred — exact match)
+    if session_name:
+        cache_key = hashlib.sha1(session_name.encode("utf-8")).hexdigest()
+        path = SSO_CACHE_DIR / f"{cache_key}.json"
+        if path.exists():
+            try:
+                with open(path) as f:
+                    data = json.load(f)
+                if ("refreshToken" in data
+                        and "clientId" in data
+                        and "clientSecret" in data):
+                    data["_cache_path"] = str(path)
+                    return data
+            except Exception:
+                pass
+
+    # Fallback: scan by startUrl (legacy profiles or missing session_name)
     cache_pattern = str(SSO_CACHE_DIR / "*.json")
-    for path in glob.glob(cache_pattern):
+    for path_str in glob.glob(cache_pattern):
         try:
-            with open(path) as f:
+            with open(path_str) as f:
                 data = json.load(f)
             if (data.get("startUrl") == start_url
                     and "refreshToken" in data
                     and "clientId" in data
                     and "clientSecret" in data):
-                data["_cache_path"] = path
+                data["_cache_path"] = path_str
                 return data
         except Exception:
             continue
@@ -259,7 +284,7 @@ def check_token_near_expiry(profile: str, threshold_minutes: int | None = None) 
     if not session.get("start_url"):
         return False
 
-    cache = _find_sso_cache_file(session["start_url"])
+    cache = _find_sso_cache_file(session["start_url"], session.get("session_name"))
     if not cache:
         return False
 
@@ -296,8 +321,8 @@ def try_silent_refresh(profile: str) -> bool:
         log.info("silent refresh: no sso-session config found")
         return False
 
-    # Step 2: Find cache file
-    cache = _find_sso_cache_file(session["start_url"])
+    # Step 2: Find cache file by session_name (exact) or startUrl (fallback)
+    cache = _find_sso_cache_file(session["start_url"], session.get("session_name"))
     if not cache:
         log.info("silent refresh: no cache file with refresh token")
         return False
@@ -769,14 +794,25 @@ def run_aws_sso_login(profile: str | None = None) -> int:
             # Secondary exit: credentials became valid while aws CLI hangs.
             # This handles post-sleep scenarios where the CLI stalls on
             # token exchange but auth actually succeeded (webview shows portal).
+            # Give aws a grace period to finish writing fresh tokens (including
+            # the refresh token needed for silent refresh later).
             now = time.time()
             if now - last_cred_check >= CRED_CHECK_INTERVAL_SECONDS:
                 last_cred_check = now
                 if _check_credentials_valid(profile):
-                    log.info("credentials valid (detected during wait), killing stale aws process")
-                    proc.kill()
-                    proc.wait()
-                    return 0
+                    log.info("credentials valid during wait, giving aws time to finish token exchange...")
+                    try:
+                        proc.wait(timeout=WEBVIEW_CLOSE_GRACE_SECONDS)
+                        output = proc.stdout.read() if proc.stdout else ""
+                        if output.strip():
+                            print(output.strip(), flush=True)
+                        log.info("aws finished normally after cred detection")
+                        return proc.returncode
+                    except subprocess.TimeoutExpired:
+                        log.info("aws did not finish in grace period, killing")
+                        proc.kill()
+                        proc.wait()
+                        return 0
 
             if time.time() > deadline:
                 log.info(f"aws sso login timed out after {SSO_LOGIN_TIMEOUT}s")
@@ -1082,15 +1118,23 @@ def _run_notify_login(profile: str) -> str:
                     aws_proc.wait()
                     return "dismiss"
 
-            # Secondary exit: credentials became valid
+            # Secondary exit: credentials became valid.
+            # Give aws a grace period to finish writing fresh tokens
+            # (including refresh token for silent refresh later).
             now = time.time()
             if now - last_cred_check >= CRED_CHECK_INTERVAL_SECONDS:
                 last_cred_check = now
                 if _check_credentials_valid(profile):
-                    log.info("credentials valid during wait, killing stale aws process")
-                    aws_proc.kill()
-                    aws_proc.wait()
-                    return "success"
+                    log.info("credentials valid during wait, giving aws time to finish token exchange...")
+                    try:
+                        aws_proc.wait(timeout=WEBVIEW_CLOSE_GRACE_SECONDS)
+                        log.info("aws finished normally after cred detection")
+                        return "success" if aws_proc.returncode == 0 else "failed"
+                    except subprocess.TimeoutExpired:
+                        log.info("aws did not finish in grace period, killing")
+                        aws_proc.kill()
+                        aws_proc.wait()
+                        return "success"
 
             if time.time() > deadline:
                 log.info(f"aws sso login timed out after {SSO_LOGIN_TIMEOUT}s")
