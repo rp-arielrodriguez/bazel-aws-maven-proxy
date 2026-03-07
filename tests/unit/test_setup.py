@@ -24,6 +24,7 @@ from setup import (
     _find_sso_access_token,
     _read_aws_config,
     _sso_list_accounts,
+    _upgrade_legacy_profile,
     _sso_list_roles,
     _write_sso_config,
     check_aws_version,
@@ -1080,16 +1081,77 @@ class TestConfigureSso:
         out = output_text(ctx)
         assert "sso-session" in out
 
-    def test_already_configured_legacy(self):
-        ctx = MockSetupContext(commands={
-            ("aws", "configure", "get", "sso_session", "--profile", "dev"):
-                CmdResult(1),
-            ("aws", "configure", "get", "sso_account_id", "--profile", "dev"):
-                CmdResult(0, "123456789012\n"),
-        })
+    def test_already_configured_legacy_decline_upgrade(self):
+        """Legacy profile, user declines upgrade → still returns True."""
+        ctx = MockSetupContext(
+            commands={
+                ("aws", "configure", "get", "sso_session", "--profile", "dev"):
+                    CmdResult(1),
+                ("aws", "configure", "get", "sso_account_id", "--profile", "dev"):
+                    CmdResult(0, "123456789012\n"),
+            },
+            confirms=[False],  # decline upgrade
+        )
         assert configure_sso(ctx, "dev") is True
         out = output_text(ctx)
         assert "legacy" in out
+
+    def test_already_configured_legacy_accept_upgrade(self):
+        """Legacy profile, user accepts upgrade → upgrades to modern."""
+        import configparser
+        home = str(Path.home())
+        config_path = f"{home}/.aws/config"
+        legacy_config = """\
+[profile dev]
+sso_start_url = https://myorg.awsapps.com/start
+sso_region = us-east-1
+sso_account_id = 123456789012
+sso_role_name = MyRole
+"""
+        ctx = MockSetupContext(
+            commands={
+                ("aws", "configure", "get", "sso_session", "--profile", "dev"):
+                    CmdResult(1),
+                ("aws", "configure", "get", "sso_account_id", "--profile", "dev"):
+                    CmdResult(0, "123456789012\n"),
+            },
+            confirms=[True],  # accept upgrade
+            files={config_path: legacy_config},
+        )
+        assert configure_sso(ctx, "dev") is True
+        out = output_text(ctx)
+        assert "Upgraded" in out
+
+        # Verify the written config is modern style
+        parser = configparser.ConfigParser()
+        parser.read_string(ctx._files[config_path])
+        assert parser.get("profile dev", "sso_session") == "dev"
+        assert parser.has_section("sso-session dev")
+        assert parser.get("sso-session dev", "sso_registration_scopes") == "sso:account:access"
+
+    def test_already_configured_legacy_upgrade_fails(self):
+        """Legacy profile, upgrade fails (missing field) → warns, returns True."""
+        home = str(Path.home())
+        config_path = f"{home}/.aws/config"
+        # Config is missing sso_start_url — _upgrade_legacy_profile will fail
+        incomplete_config = """\
+[profile dev]
+sso_account_id = 123456789012
+sso_role_name = MyRole
+"""
+        ctx = MockSetupContext(
+            commands={
+                ("aws", "configure", "get", "sso_session", "--profile", "dev"):
+                    CmdResult(1),
+                ("aws", "configure", "get", "sso_account_id", "--profile", "dev"):
+                    CmdResult(0, "123456789012\n"),
+            },
+            confirms=[True],  # accept upgrade
+            files={config_path: incomplete_config},
+        )
+        assert configure_sso(ctx, "dev") is True
+        out = output_text(ctx)
+        assert "Upgrade failed" in out
 
     def test_not_configured_user_says_no(self):
         ctx = MockSetupContext(
@@ -1825,7 +1887,8 @@ class TestSsoListRoles:
 # ===================================================================
 
 class TestClearSsoCache:
-    def test_removes_client_registrations(self):
+    def test_removes_registration_without_grant_types(self):
+        """Very old CLI: no grantTypes field → device-code assumed → removed."""
         import json
         home = str(Path.home())
         reg = f"{home}/.aws/sso/cache/reg.json"
@@ -1836,6 +1899,47 @@ class TestClearSsoCache:
         _clear_sso_cache(ctx)
         assert reg in ctx._removed
 
+    def test_removes_device_code_registration(self):
+        """Old CLI with device_code in grantTypes → removed."""
+        import json
+        home = str(Path.home())
+        reg = f"{home}/.aws/sso/cache/old-reg.json"
+        ctx = MockSetupContext(files={
+            reg: json.dumps({"clientId": "cid", "clientSecret": "sec",
+                             "expiresAt": "2099-01-01",
+                             "grantTypes": ["urn:ietf:params:oauth:grant-type:device_code"],
+                             "scopes": []})
+        })
+        _clear_sso_cache(ctx)
+        assert reg in ctx._removed
+
+    def test_removes_device_code_short_form(self):
+        """device_code (short form) in grantTypes → removed."""
+        import json
+        home = str(Path.home())
+        reg = f"{home}/.aws/sso/cache/dc.json"
+        ctx = MockSetupContext(files={
+            reg: json.dumps({"clientId": "cid", "clientSecret": "sec",
+                             "expiresAt": "2099-01-01",
+                             "grantTypes": ["device_code"]})
+        })
+        _clear_sso_cache(ctx)
+        assert reg in ctx._removed
+
+    def test_preserves_pkce_registration(self):
+        """Modern CLI with authorization_code grantType → preserved."""
+        import json
+        home = str(Path.home())
+        reg = f"{home}/.aws/sso/cache/pkce-reg.json"
+        ctx = MockSetupContext(files={
+            reg: json.dumps({"clientId": "cid", "clientSecret": "sec",
+                             "expiresAt": "2099-01-01",
+                             "grantTypes": ["authorization_code", "refresh_token"],
+                             "scopes": ["sso:account:access"]})
+        })
+        _clear_sso_cache(ctx)
+        assert reg not in ctx._removed
+
     def test_preserves_access_tokens(self):
         import json
         home = str(Path.home())
@@ -1845,6 +1949,29 @@ class TestClearSsoCache:
                              "expiresAt": "2099-01-01"})
         })
         _clear_sso_cache(ctx)
+        assert tok not in ctx._removed
+
+    def test_mixed_cache_surgical(self):
+        """Device-code reg removed, PKCE reg + tokens preserved."""
+        import json
+        home = str(Path.home())
+        stale = f"{home}/.aws/sso/cache/stale.json"
+        pkce = f"{home}/.aws/sso/cache/pkce.json"
+        tok = f"{home}/.aws/sso/cache/token.json"
+        ctx = MockSetupContext(files={
+            stale: json.dumps({"clientId": "old", "clientSecret": "s",
+                               "expiresAt": "2099-01-01",
+                               "grantTypes": ["urn:ietf:params:oauth:grant-type:device_code"]}),
+            pkce: json.dumps({"clientId": "new", "clientSecret": "s",
+                              "expiresAt": "2099-01-01",
+                              "grantTypes": ["authorization_code", "refresh_token"],
+                              "scopes": ["sso:account:access"]}),
+            tok: json.dumps({"accessToken": "at", "startUrl": "https://x",
+                             "expiresAt": "2099-01-01"}),
+        })
+        _clear_sso_cache(ctx)
+        assert stale in ctx._removed
+        assert pkce not in ctx._removed
         assert tok not in ctx._removed
 
     def test_skips_malformed_files(self):
@@ -1858,6 +1985,148 @@ class TestClearSsoCache:
         ctx = MockSetupContext()
         _clear_sso_cache(ctx)  # no error
         assert ctx._removed == []
+
+
+# ===================================================================
+# TestUpgradeLegacyProfile
+# ===================================================================
+
+class TestUpgradeLegacyProfile:
+    LEGACY_CONFIG = """\
+[profile bazel-proxy]
+sso_start_url = https://myorg.awsapps.com/start
+sso_region = us-east-1
+sso_account_id = 123456789012
+sso_role_name = MyRole
+"""
+
+    def test_upgrade_happy_path(self):
+        """Legacy profile → modern sso-session style."""
+        import configparser
+        home = str(Path.home())
+        config_path = f"{home}/.aws/config"
+        ctx = MockSetupContext(files={config_path: self.LEGACY_CONFIG})
+        result = _upgrade_legacy_profile(ctx, "bazel-proxy")
+        assert result is True
+
+        # Parse the written config
+        written = ctx._files[config_path]
+        parser = configparser.ConfigParser()
+        parser.read_string(written)
+
+        # Profile should have sso_session, account_id, role_name
+        assert parser.get("profile bazel-proxy", "sso_session") == "bazel-proxy"
+        assert parser.get("profile bazel-proxy", "sso_account_id") == "123456789012"
+        assert parser.get("profile bazel-proxy", "sso_role_name") == "MyRole"
+        # Legacy direct fields should be gone from profile
+        assert not parser.has_option("profile bazel-proxy", "sso_start_url")
+        assert not parser.has_option("profile bazel-proxy", "sso_region")
+
+        # sso-session section should exist with correct values
+        assert parser.has_section("sso-session bazel-proxy")
+        assert parser.get("sso-session bazel-proxy", "sso_start_url") == "https://myorg.awsapps.com/start"
+        assert parser.get("sso-session bazel-proxy", "sso_region") == "us-east-1"
+        assert parser.get("sso-session bazel-proxy", "sso_registration_scopes") == "sso:account:access"
+
+    def test_upgrade_missing_field(self):
+        """Missing sso_start_url → returns False."""
+        home = str(Path.home())
+        config_path = f"{home}/.aws/config"
+        incomplete = """\
+[profile bazel-proxy]
+sso_account_id = 123456789012
+sso_role_name = MyRole
+"""
+        ctx = MockSetupContext(files={config_path: incomplete})
+        result = _upgrade_legacy_profile(ctx, "bazel-proxy")
+        assert result is False
+        assert any("missing" in m.lower() for m in ctx._output)
+
+    def test_upgrade_preserves_other_profiles(self):
+        """Only the target profile is upgraded; other profiles untouched."""
+        import configparser
+        home = str(Path.home())
+        config_path = f"{home}/.aws/config"
+        multi = """\
+[profile other]
+region = eu-west-1
+output = json
+
+[profile bazel-proxy]
+sso_start_url = https://myorg.awsapps.com/start
+sso_region = us-east-1
+sso_account_id = 123456789012
+sso_role_name = MyRole
+"""
+        ctx = MockSetupContext(files={config_path: multi})
+        result = _upgrade_legacy_profile(ctx, "bazel-proxy")
+        assert result is True
+
+        written = ctx._files[config_path]
+        parser = configparser.ConfigParser()
+        parser.read_string(written)
+
+        # Other profile unchanged
+        assert parser.get("profile other", "region") == "eu-west-1"
+        assert parser.get("profile other", "output") == "json"
+        # Upgraded profile has sso_session
+        assert parser.get("profile bazel-proxy", "sso_session") == "bazel-proxy"
+
+    def test_upgrade_existing_session_no_overwrite(self):
+        """sso-session already exists → returns False, no overwrite."""
+        home = str(Path.home())
+        config_path = f"{home}/.aws/config"
+        with_session = self.LEGACY_CONFIG + """\
+
+[sso-session bazel-proxy]
+sso_start_url = https://other.awsapps.com/start
+sso_region = eu-west-1
+"""
+        ctx = MockSetupContext(files={config_path: with_session})
+        result = _upgrade_legacy_profile(ctx, "bazel-proxy")
+        assert result is False
+        assert any("already exists" in m for m in ctx._output)
+
+    def test_upgrade_preserves_extra_keys(self):
+        """Non-SSO keys in the profile are preserved."""
+        import configparser
+        home = str(Path.home())
+        config_path = f"{home}/.aws/config"
+        with_extra = """\
+[profile bazel-proxy]
+sso_start_url = https://myorg.awsapps.com/start
+sso_region = us-east-1
+sso_account_id = 123456789012
+sso_role_name = MyRole
+region = sa-east-1
+output = json
+"""
+        ctx = MockSetupContext(files={config_path: with_extra})
+        result = _upgrade_legacy_profile(ctx, "bazel-proxy")
+        assert result is True
+
+        parser = configparser.ConfigParser()
+        parser.read_string(ctx._files[config_path])
+        assert parser.get("profile bazel-proxy", "region") == "sa-east-1"
+        assert parser.get("profile bazel-proxy", "output") == "json"
+        assert parser.get("profile bazel-proxy", "sso_session") == "bazel-proxy"
+
+    def test_upgrade_empty_config(self):
+        """Empty config → returns False."""
+        home = str(Path.home())
+        config_path = f"{home}/.aws/config"
+        ctx = MockSetupContext(files={config_path: ""})
+        result = _upgrade_legacy_profile(ctx, "bazel-proxy")
+        assert result is False
+
+    def test_upgrade_section_not_found(self):
+        """Profile not in config → returns False."""
+        home = str(Path.home())
+        config_path = f"{home}/.aws/config"
+        ctx = MockSetupContext(files={config_path: "[profile other]\nregion = us-east-1\n"})
+        result = _upgrade_legacy_profile(ctx, "bazel-proxy")
+        assert result is False
+        assert any("not found" in m.lower() for m in ctx._output)
 
 
 # ===================================================================
@@ -2362,3 +2631,81 @@ class TestRunSetupScenarios:
         assert "[profile myprof]" in final_config
         assert "sso_account_id = 222222222222" in final_config
         assert "sso_role_name = ReadOnly" in final_config
+
+    def test_legacy_profile_upgrade_then_login(self):
+        """PATH 4: legacy profile detected → upgrade → login succeeds."""
+        import configparser
+        home = str(Path.home())
+        config_path = f"{home}/.aws/config"
+        legacy_config = """\
+[profile bazel-proxy]
+sso_start_url = https://myorg.awsapps.com/start
+sso_region = us-east-1
+sso_account_id = 123456789012
+sso_role_name = MyRole
+"""
+        ctx = self._base_ctx(
+            extra_commands={
+                # Legacy SSO detected
+                ("aws", "configure", "get", "sso_session", "--profile", "bazel-proxy"):
+                    CmdResult(1),
+                ("aws", "configure", "get", "sso_account_id", "--profile", "bazel-proxy"):
+                    CmdResult(0, "123456789012\n"),
+                # After upgrade, creds invalid → login
+                ("aws", "sts", "get-caller-identity", "--profile", "bazel-proxy"):
+                    CmdResult(0, '{"Account":"123456789012"}\n'),
+                ("aws", "s3", "ls", "s3://my-bucket/", "--profile", "bazel-proxy"):
+                    CmdResult(0, "file.jar\n"),
+                "python3": CmdResult(0),  # do_sso_login (won't be called — creds valid)
+                ("mise", "run", "containers:up"): CmdResult(0),
+            },
+            extra_files={config_path: legacy_config},
+            prompts=["bazel-proxy", "us-east-1", "my-bucket", "8888", "notify"],
+            confirms=[True, True],  # upgrade legacy, start containers
+        )
+        assert run_setup(ctx) == 0
+        out = output_text(ctx)
+        assert "Upgraded" in out
+        assert "Setup complete" in out
+
+        # Verify config is now modern
+        final_config = ctx._files.get(config_path, "")
+        parser = configparser.ConfigParser()
+        parser.read_string(final_config)
+        assert parser.get("profile bazel-proxy", "sso_session") == "bazel-proxy"
+        assert parser.has_section("sso-session bazel-proxy")
+        assert parser.get("sso-session bazel-proxy", "sso_registration_scopes") == "sso:account:access"
+
+    def test_legacy_profile_decline_upgrade_then_login(self):
+        """PATH 4 variant: legacy profile, decline upgrade → login still works."""
+        home = str(Path.home())
+        config_path = f"{home}/.aws/config"
+        legacy_config = """\
+[profile bazel-proxy]
+sso_start_url = https://myorg.awsapps.com/start
+sso_region = us-east-1
+sso_account_id = 123456789012
+sso_role_name = MyRole
+"""
+        ctx = self._base_ctx(
+            extra_commands={
+                # Legacy SSO detected
+                ("aws", "configure", "get", "sso_session", "--profile", "bazel-proxy"):
+                    CmdResult(1),
+                ("aws", "configure", "get", "sso_account_id", "--profile", "bazel-proxy"):
+                    CmdResult(0, "123456789012\n"),
+                # Creds valid (no login needed)
+                ("aws", "sts", "get-caller-identity", "--profile", "bazel-proxy"):
+                    CmdResult(0, '{"Account":"123456789012"}\n'),
+                ("aws", "s3", "ls", "s3://my-bucket/", "--profile", "bazel-proxy"):
+                    CmdResult(0, "file.jar\n"),
+                ("mise", "run", "containers:up"): CmdResult(0),
+            },
+            extra_files={config_path: legacy_config},
+            prompts=["bazel-proxy", "us-east-1", "my-bucket", "8888", "notify"],
+            confirms=[False, True],  # decline upgrade, start containers
+        )
+        assert run_setup(ctx) == 0
+        out = output_text(ctx)
+        assert "legacy" in out.lower()
+        assert "Setup complete" in out

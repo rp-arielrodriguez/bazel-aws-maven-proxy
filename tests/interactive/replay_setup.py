@@ -652,10 +652,15 @@ def scenario_everything_fails():
 
 
 def scenario_legacy_sso():
-    """Profile uses legacy SSO style (no sso_session, has sso_account_id)."""
+    """Profile uses legacy SSO style (no sso_session, has sso_account_id).
+
+    Now prompts to upgrade legacy → modern sso-session config.
+    Decline upgrade here to keep the legacy behavior visible.
+    """
     scenario_banner(
         "Legacy SSO Configuration",
-        "Profile has sso_account_id but no sso_session → detected as legacy"
+        "Profile has sso_account_id but no sso_session → detected as legacy,\n"
+        "  user is offered upgrade to modern sso-session config"
     )
 
     commands = {
@@ -670,7 +675,7 @@ def scenario_legacy_sso():
         tools=_base_tools_all(),
         commands=commands,
         prompts=["default", "us-west-2", "my-bucket", "8888", "notify"],
-        confirms=[True],
+        confirms=[False, True],  # decline upgrade, start containers
         env={"TERM_PROGRAM": "Terminal"},
     )
 

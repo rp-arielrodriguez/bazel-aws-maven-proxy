@@ -24,7 +24,7 @@ tests/
 
 ## Test Coverage
 
-**446 passing tests** (22 s3proxy + 211 watcher + 52 monitor + 161 setup)
+**461 passing tests** (22 s3proxy + 211 watcher + 52 monitor + 176 setup)
 
 ### S3 Proxy Tests (`tests/unit/test_s3proxy.py`)
 
@@ -270,13 +270,14 @@ Uses `MockSetupContext` — subclass of `SetupContext` with in-memory filesystem
 **SSO Configuration Check — `TestCheckSsoConfiguration`** (4 tests):
 - Modern sso_session, legacy, none, empty output
 
-**Configure SSO — `TestConfigureSso`** (11 tests):
-- Already configured (modern/legacy), user says no/skip
+**Configure SSO — `TestConfigureSso`** (14 tests):
+- Already configured modern, legacy decline/accept/fail upgrade
 - Auto-discover: login → list accounts → pick → list roles → pick → config written
 - Auto-discover: single role auto-selected, temp config cleaned up
 - Login fails → manual fallback, missing account ID rejected
 - Duplicate profile not overwritten
 - Stale OIDC client registrations cleared, token files preserved
+- Legacy profile upgrade via configparser (read fields, rewrite modern sso-session)
 
 **Credentials Valid — `TestCheckCredentialsValid`** (2 tests):
 - Valid, invalid
@@ -306,8 +307,17 @@ Uses `MockSetupContext` — subclass of `SetupContext` with in-memory filesystem
 **SSO List Roles — `TestSsoListRoles`** (3 tests):
 - Success, command fails, bad JSON
 
-**Clear SSO Cache — `TestClearSsoCache`** (4 tests):
-- Removes client registrations, preserves access tokens, skips malformed, empty cache
+**Clear SSO Cache — `TestClearSsoCache`** (8 tests):
+- Surgical: removes device-code registrations (URN + short form), preserves PKCE registrations
+- Removes registrations without grantTypes (very old CLI), preserves access tokens
+- Mixed cache: only device-code removed, PKCE + tokens preserved
+- Skips malformed, empty cache
+
+**Upgrade Legacy Profile — `TestUpgradeLegacyProfile`** (7 tests):
+- Happy path: legacy → modern sso-session with configparser
+- Missing field, section not found, empty config → returns False
+- Preserves other profiles, preserves extra non-SSO keys
+- Existing sso-session → no overwrite
 
 **Discover Account and Role — `TestDiscoverAccountAndRole`** (4 tests):
 - Token not found, no accounts, no roles, temp config always cleaned
@@ -318,8 +328,9 @@ Uses `MockSetupContext` — subclass of `SetupContext` with in-memory filesystem
 **Full Setup Flow — `TestRunSetup`** (6 tests):
 - Happy path, prereq fail early exit, no SSO flow, login needed flow, permissions denied exits 1, dialog timeout warns and continues
 
-**Setup Scenarios — `TestRunSetupScenarios`** (13 tests):
+**Setup Scenarios — `TestRunSetupScenarios`** (15 tests):
 - Docker fallback, keep existing .env, SSO login fails + empty account, expired creds + login fails, placeholder bucket, headless, mise fails, invalid SSO mode, legacy SSO, container start fail, AWS too old, SSO watcher install fails, full auto-discover flow
+- PATH 4: legacy profile upgrade then login, legacy profile decline upgrade then login
 
 ## Running Tests
 

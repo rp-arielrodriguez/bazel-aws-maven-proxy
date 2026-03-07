@@ -825,6 +825,72 @@ sso_registration_scopes = sso:account:access
     return True
 
 
+def _upgrade_legacy_profile(ctx: SetupContext, profile: str) -> bool:
+    """Upgrade legacy SSO profile to modern sso-session style.
+
+    Reads sso_start_url, sso_region, sso_account_id, sso_role_name from
+    the legacy [profile X] section via configparser, removes legacy SSO
+    fields (sso_start_url, sso_region), adds sso_session reference, and
+    appends a new [sso-session X] block with sso_registration_scopes.
+
+    Returns True on success.
+    """
+    import configparser
+    import io
+
+    config_path = Path.home() / ".aws" / "config"
+    config_text = _read_aws_config(ctx)
+    if not config_text:
+        ctx.warn("Cannot upgrade: ~/.aws/config is empty")
+        return False
+
+    parser = configparser.ConfigParser()
+    parser.read_string(config_text)
+
+    # AWS config uses "profile X" as section name (except [default])
+    section = f"profile {profile}" if profile != "default" else "default"
+    if not parser.has_section(section):
+        ctx.warn(f"Cannot upgrade: section [{section}] not found")
+        return False
+
+    # Extract required legacy fields
+    legacy_keys = ("sso_start_url", "sso_region", "sso_account_id", "sso_role_name")
+    fields = {}
+    for key in legacy_keys:
+        val = parser.get(section, key, fallback=None)
+        if val:
+            fields[key] = val
+
+    missing = [k for k in legacy_keys if k not in fields]
+    if missing:
+        ctx.warn(f"Cannot upgrade: missing {', '.join(missing)} in profile")
+        return False
+
+    # Check sso-session doesn't already exist
+    session_name = profile
+    session_section = f"sso-session {session_name}"
+    if parser.has_section(session_section):
+        ctx.warn(f"Session '{session_name}' already exists — not overwriting")
+        return False
+
+    # Remove legacy SSO fields from profile, add sso_session reference
+    for key in ("sso_start_url", "sso_region"):
+        parser.remove_option(section, key)
+    parser.set(section, "sso_session", session_name)
+
+    # Add sso-session section
+    parser.add_section(session_section)
+    parser.set(session_section, "sso_start_url", fields["sso_start_url"])
+    parser.set(session_section, "sso_region", fields["sso_region"])
+    parser.set(session_section, "sso_registration_scopes", "sso:account:access")
+
+    # Write back
+    buf = io.StringIO()
+    parser.write(buf)
+    ctx.write_file(config_path, buf.getvalue())
+    return True
+
+
 def _find_sso_access_token(ctx: SetupContext, start_url: str) -> str:
     """Find a valid SSO access token from ~/.aws/sso/cache/ matching start_url."""
     import json as _json
@@ -907,14 +973,17 @@ def _sso_list_roles(ctx: SetupContext, token: str, account_id: str,
 
 
 def _clear_sso_cache(ctx: SetupContext) -> None:
-    """Remove stale OIDC client registrations to force fresh PKCE registration.
+    """Remove stale OIDC client registrations that use device-code grant type.
 
-    Only removes client registration files (those with 'clientId' but no
-    'accessToken'). Access tokens for existing profiles are preserved so
-    re-running setup doesn't invalidate a working session.
+    Surgical: only removes registrations where ``grantTypes`` contains
+    ``"device_code"`` (old CLI < 2.22.0) or where ``grantTypes`` is absent
+    (very old CLI that didn't cache the field).  Modern PKCE registrations
+    (``authorization_code``) and all access tokens are preserved.
 
-    Stale registrations from CLI < 2.22.0 use device-code grant type
-    instead of PKCE, which breaks the webview login flow.
+    This ensures ``aws sso login --no-browser`` creates a fresh PKCE
+    registration instead of reusing a cached device-code one, which would
+    show the "Authorization requested — enter code" screen instead of the
+    direct IdP login page in the webview.
     """
     import json as _json
     cache_dir = Path.home() / ".aws" / "sso" / "cache"
@@ -923,8 +992,17 @@ def _clear_sso_cache(ctx: SetupContext) -> None:
         try:
             content = ctx.read_file(Path(path_str))
             data = _json.loads(content)
-            # Client registrations have clientId; access tokens have accessToken
-            if "clientId" in data and "accessToken" not in data:
+            # Skip access tokens (have accessToken field)
+            if "accessToken" in data:
+                continue
+            # Only look at client registrations (have clientId)
+            if "clientId" not in data:
+                continue
+            grant_types = data.get("grantTypes", [])
+            # Remove if device_code present (exact or URN form) OR
+            # grantTypes missing/empty (very old CLI didn't cache it)
+            has_device_code = any("device_code" in gt for gt in grant_types)
+            if not grant_types or has_device_code:
                 ctx.remove_file(Path(path_str))
         except (OSError, _json.JSONDecodeError):
             continue
@@ -938,13 +1016,8 @@ def _discover_account_and_role(
 ) -> tuple[str, str]:
     """Login to SSO, list accounts/roles, let user pick.
 
-    Clears stale OIDC cache first to ensure PKCE flow (not device-code).
     Returns (account_id, role_name) or ("", "") on failure.
     """
-    # Clear SSO cache — stale registrations (device-code) and tokens
-    # (missing sso:account:access scope) both cause discover to fail
-    _clear_sso_cache(ctx)
-
     # Write temporary sso-session for login
     session_name = f"{profile}-setup-tmp"
     config_path = Path.home() / ".aws" / "config"
@@ -1052,8 +1125,19 @@ def configure_sso(ctx: SetupContext, profile: str) -> bool:
     if check.configured:
         if check.style == "modern":
             ctx.ok(f"Profile '{profile}' uses sso-session '{check.session_name}'")
-        else:
-            ctx.ok(f"Profile '{profile}' has SSO configured (legacy style)")
+            ctx.print("")
+            return True
+        # Legacy profile — offer upgrade to modern sso-session for PKCE
+        ctx.warn(f"Profile '{profile}' uses legacy SSO config (no sso-session)")
+        ctx.print("  Legacy config uses device-code flow (manual code entry).")
+        ctx.print("  Modern config uses PKCE (direct login, no code needed).")
+        ctx.print("")
+        if ctx.confirm("Upgrade to modern sso-session config?"):
+            if _upgrade_legacy_profile(ctx, profile):
+                ctx.ok(f"Upgraded '{profile}' to modern sso-session style")
+                ctx.print("")
+                return True
+            ctx.warn("Upgrade failed — keeping legacy config")
         ctx.print("")
         return True
 
@@ -1125,9 +1209,13 @@ def check_credentials_valid(ctx: SetupContext, profile: str) -> bool:
 def do_sso_login(ctx: SetupContext, profile: str) -> bool:
     """Perform SSO login using watcher's run_aws_sso_login.
 
+    Clears stale device-code OIDC registrations first to ensure the
+    webview gets the PKCE flow (direct IdP login, no code entry).
+
     Returns True on success. Runs interactive (no capture) so errors
     and webview prompts are visible to the user.
     """
+    _clear_sso_cache(ctx)
     repo = str(ctx.repo_root)
     r = ctx.run_cmd([
         "python3", "-c",
