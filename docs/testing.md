@@ -24,7 +24,7 @@ tests/
 
 ## Test Coverage
 
-**468 passing tests** (22 s3proxy + 214 watcher + 52 monitor + 180 setup)
+**473 passing tests** (22 s3proxy + 219 watcher + 52 monitor + 180 setup)
 
 ### S3 Proxy Tests (`tests/unit/test_s3proxy.py`)
 
@@ -74,6 +74,9 @@ tests/
 
 **Clear Cooldown — `TestClearCooldown`** (3 tests):
 - Removes last-run file, no error when missing, main() clears stale cooldown on startup
+
+**Update Check — `TestCheckForUpdates`** (5 tests):
+- No repo path is noop, writes state file when update available, clears when up to date, error preserves existing state, timeout does not raise
 
 **Main Loop — `TestMainLoopNotifyMode`** (8 tests):
 - Refresh success clears signal, dismiss keeps signal

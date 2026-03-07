@@ -85,6 +85,11 @@ try:
 except ValueError:
     PROACTIVE_REFRESH_MINUTES = 30
 
+# Repository path for update checks (set by launchd plist)
+REPO_PATH = os.environ.get("REPO_PATH", "")
+UPDATE_CHECK_INTERVAL = 12 * 3600  # 12 hours between checks
+UPDATE_STATE_FILE = STATE_DIR / "update-available.json"
+
 # Login mode: state file > env var > default
 _ENV_MODE = os.environ.get("SSO_LOGIN_MODE", "notify")
 
@@ -843,6 +848,41 @@ def run_aws_sso_login(profile: str | None = None) -> int:
             _kill_webview()
 
 
+def check_for_updates() -> None:
+    """Check if the repo is behind origin/main and write state file.
+
+    Runs ``check-update.sh --json`` from the repo directory. The result
+    is written to ``~/.aws/sso-renewer/update-available.json`` so that
+    ``sso-status`` can display it.  Errors are silently ignored — this
+    is best-effort and must never block the main loop.
+    """
+    if not REPO_PATH:
+        return
+    check_script = os.path.join(REPO_PATH, "scripts", "check-update.sh")
+    if not os.path.isfile(check_script):
+        return
+    try:
+        result = subprocess.run(
+            ["bash", check_script, "--json"],
+            capture_output=True, text=True, timeout=30,
+            cwd=REPO_PATH,
+        )
+        data = json.loads(result.stdout) if result.stdout.strip() else {}
+        status = data.get("status", "")
+        if status == "update_available":
+            log.info(f"update available: {data.get('commits_behind', '?')} commits behind")
+            UPDATE_STATE_FILE.write_text(result.stdout)
+        elif status == "up_to_date":
+            # Clear stale state
+            try:
+                UPDATE_STATE_FILE.unlink()
+            except FileNotFoundError:
+                pass
+        # "error" status: leave existing state file (if any) untouched
+    except Exception:
+        pass  # network down, timeout, parse error — all ok
+
+
 def write_signal(profile: str, reason: str = "proactive refresh failed") -> None:
     """Write signal file so notify/webview flow can trigger."""
     try:
@@ -1276,6 +1316,8 @@ def main() -> int:
     proactive_failures = 0
     max_proactive_failures = 3  # after N failures, write signal and stop proactive
 
+    last_update_check: float = 0
+
     while True:
         try:
             # Re-read mode each loop so toggles take effect immediately
@@ -1303,6 +1345,12 @@ def main() -> int:
                             write_signal(PROFILE, "proactive silent refresh exhausted")
                         else:
                             log.info(f"proactive: silent refresh failed ({proactive_failures}/{max_proactive_failures})")
+
+            # Periodic update check (every 12h, non-blocking)
+            if (REPO_PATH
+                    and time.time() - last_update_check >= UPDATE_CHECK_INTERVAL):
+                last_update_check = time.time()
+                check_for_updates()
 
             if should_trigger_login():
                 if not try_acquire_lock():

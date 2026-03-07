@@ -372,6 +372,14 @@ fi
 echo "  Start containers with: mise run containers:up"
 """
 
+[tasks.check-update]
+description = "Check if updates are available from origin/main"
+run = "bash scripts/check-update.sh"
+
+[tasks.upgrade]
+description = "Smart upgrade: git pull + selective rebuild/restart"
+run = "bash scripts/upgrade.sh"
+
 [tasks."sso-clean:cookies"]
 description = "Clear webview cached cookies (forces full re-auth on next login)"
 run = """

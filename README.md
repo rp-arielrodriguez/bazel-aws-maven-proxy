@@ -148,6 +148,8 @@ mise run config                          # Show current configuration
 mise run config:set KEY=VALUE            # Update any setting (e.g. PROXY_PORT=9000)
 mise run tls-skip:enable                 # Enable TLS skip (corporate proxy)
 mise run tls-skip:disable                # Disable TLS skip
+mise run check-update                    # Check if updates available
+mise run upgrade                         # Smart upgrade (pull + selective rebuild)
 ```
 
 `config:set` will remind you which service needs restarting after each change.
@@ -279,13 +281,13 @@ mise run containers:restart
 |----------|-------------|
 | [docs/sso-watcher.md](docs/sso-watcher.md) | SSO watcher architecture and internals |
 | [docs/state-machine.md](docs/state-machine.md) | State diagrams (Mermaid) for modes, signals, cooldown |
-| [docs/testing.md](docs/testing.md) | Test structure and coverage (468 tests) |
+| [docs/testing.md](docs/testing.md) | Test structure and coverage (473 tests) |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute |
 
 ## Testing
 
 ```bash
-pytest              # Run all 468 tests
+pytest              # Run all 473 tests
 ./run_tests.sh      # Helper script
 ```
 

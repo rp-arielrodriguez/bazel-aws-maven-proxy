@@ -1672,6 +1672,82 @@ class TestCheckTokenNearExpiry:
 
 
 # ---------------------------------------------------------------------------
+# Update check
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestCheckForUpdates:
+
+    def test_no_repo_path_is_noop(self, watcher_state):
+        """No REPO_PATH set → does nothing."""
+        with patch.object(watcher, 'REPO_PATH', ''):
+            watcher.check_for_updates()  # should not raise
+        assert not watcher.UPDATE_STATE_FILE.exists()
+
+    def test_writes_state_file_when_update_available(self, watcher_state, tmp_path):
+        """check-update.sh --json returns update_available → state file written."""
+        state_file = watcher_state["state_dir"] / "update-available.json"
+        script = tmp_path / "scripts" / "check-update.sh"
+        script.parent.mkdir()
+        script.write_text('#!/bin/bash\necho \'{"status":"update_available","commits_behind":3}\'')
+        script.chmod(0o755)
+
+        with patch.object(watcher, 'REPO_PATH', str(tmp_path)), \
+             patch.object(watcher, 'UPDATE_STATE_FILE', state_file):
+            watcher.check_for_updates()
+
+        assert state_file.exists()
+        data = json.loads(state_file.read_text())
+        assert data["commits_behind"] == 3
+
+    def test_clears_state_file_when_up_to_date(self, watcher_state, tmp_path):
+        """check-update.sh returns up_to_date → stale state file removed."""
+        state_file = watcher_state["state_dir"] / "update-available.json"
+        state_file.write_text('{"status":"update_available","commits_behind":1}')
+
+        script = tmp_path / "scripts" / "check-update.sh"
+        script.parent.mkdir()
+        script.write_text('#!/bin/bash\necho \'{"status":"up_to_date","commits_behind":0}\'')
+        script.chmod(0o755)
+
+        with patch.object(watcher, 'REPO_PATH', str(tmp_path)), \
+             patch.object(watcher, 'UPDATE_STATE_FILE', state_file):
+            watcher.check_for_updates()
+
+        assert not state_file.exists()
+
+    def test_error_leaves_existing_state_untouched(self, watcher_state, tmp_path):
+        """check-update.sh fails → existing state file preserved."""
+        state_file = watcher_state["state_dir"] / "update-available.json"
+        state_file.write_text('{"status":"update_available","commits_behind":2}')
+
+        script = tmp_path / "scripts" / "check-update.sh"
+        script.parent.mkdir()
+        script.write_text('#!/bin/bash\necho \'{"status":"error","message":"fetch failed"}\'')
+        script.chmod(0o755)
+
+        with patch.object(watcher, 'REPO_PATH', str(tmp_path)), \
+             patch.object(watcher, 'UPDATE_STATE_FILE', state_file):
+            watcher.check_for_updates()
+
+        assert state_file.exists()
+        data = json.loads(state_file.read_text())
+        assert data["commits_behind"] == 2
+
+    def test_script_timeout_does_not_raise(self, watcher_state, tmp_path):
+        """Script hangs → timeout, no exception propagated."""
+        script = tmp_path / "scripts" / "check-update.sh"
+        script.parent.mkdir()
+        script.write_text('#!/bin/bash\nsleep 999')
+        script.chmod(0o755)
+
+        with patch.object(watcher, 'REPO_PATH', str(tmp_path)), \
+             patch.object(watcher.subprocess, 'run',
+                          side_effect=subprocess.TimeoutExpired(cmd="bash", timeout=30)):
+            watcher.check_for_updates()  # should not raise
+
+
+# ---------------------------------------------------------------------------
 # Proactive refresh in main loop
 # ---------------------------------------------------------------------------
 

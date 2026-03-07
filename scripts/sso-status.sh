@@ -103,4 +103,16 @@ else
     echo "  Credentials:  ✓ valid (no renewal needed)"
 fi
 
+# Update available
+UPDATE_FILE="$STATE_DIR/update-available.json"
+if [ -f "$UPDATE_FILE" ]; then
+    COMMITS=$(python3 -c "import json; print(json.load(open('$UPDATE_FILE')).get('commits_behind','?'))" 2>/dev/null || echo "?")
+    ACTIONS=$(python3 -c "import json; print(json.load(open('$UPDATE_FILE')).get('actions',''))" 2>/dev/null || echo "")
+    echo "  Update:       ⚠ $COMMITS commit(s) behind origin/main"
+    if [ -n "$ACTIONS" ]; then
+        echo "                $ACTIONS"
+    fi
+    echo "                Run: mise run upgrade"
+fi
+
 echo "────────────────────────────────────────────"

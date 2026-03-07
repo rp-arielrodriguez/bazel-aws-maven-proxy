@@ -56,6 +56,8 @@ mise run config                          # Show current .env values
 mise run config:set KEY=VALUE            # Update any .env setting post-install
 mise run tls-skip:enable                 # Enable TLS skip (corporate proxy)
 mise run tls-skip:disable                # Disable TLS skip
+mise run check-update                    # Check if updates available
+mise run upgrade                         # Smart upgrade (pull + selective rebuild)
 ```
 
 Environment variables in `.env` (copy from `.env.example`):
@@ -229,7 +231,7 @@ maven_install(
 
 Run tests:
 ```bash
-pytest              # All tests (468)
+pytest              # All tests (473)
 ./run_tests.sh      # Helper script
 ```
 
