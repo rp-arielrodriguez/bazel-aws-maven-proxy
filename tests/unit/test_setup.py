@@ -24,6 +24,7 @@ from setup import (
     _find_sso_access_token,
     _read_aws_config,
     _sso_list_accounts,
+    _remove_temp_token_cache,
     _upgrade_legacy_profile,
     _sso_list_roles,
     _write_sso_config,
@@ -2212,11 +2213,18 @@ class TestDiscoverAccountAndRole:
 
     def test_temp_config_always_cleaned(self):
         """Temp config removed even when login fails."""
+        import hashlib
         home = str(Path.home())
         config_path = f"{home}/.aws/config"
+        session_name = "dev-setup-tmp"
+        cache_key = hashlib.sha1(session_name.encode("utf-8")).hexdigest()
+        cache_file = f"{home}/.aws/sso/cache/{cache_key}.json"
         ctx = MockSetupContext(
             commands={"python3": CmdResult(1, "", "fail")},
-            files={config_path: "[profile existing]\n"},
+            files={
+                config_path: "[profile existing]\n",
+                cache_file: '{"accessToken":"old","startUrl":"https://org.awsapps.com/start"}',
+            },
         )
         _discover_account_and_role(
             ctx, "dev", "https://org.awsapps.com/start", "us-east-1")
@@ -2224,6 +2232,91 @@ class TestDiscoverAccountAndRole:
         final_config = ctx._files.get(config_path, "")
         assert "setup-tmp" not in final_config
         assert "[profile existing]" in final_config
+        # Temp token cache file removed
+        assert cache_file not in ctx._files
+        assert cache_file in ctx._removed
+
+    def test_temp_token_cache_cleaned_on_success(self):
+        """Temp token cache file removed after successful discovery."""
+        import hashlib, json
+        home = str(Path.home())
+        config_path = f"{home}/.aws/config"
+        session_name = "myprof-setup-tmp"
+        cache_key = hashlib.sha1(session_name.encode("utf-8")).hexdigest()
+        cache_file = f"{home}/.aws/sso/cache/{cache_key}.json"
+        # Also put a "real" token that _find_sso_access_token will find
+        real_cache = f"{home}/.aws/sso/cache/real.json"
+        real_token = json.dumps({
+            "accessToken": "good-token",
+            "startUrl": "https://org.awsapps.com/start",
+            "expiresAt": "2099-01-01T00:00:00Z",
+        })
+        accounts = [{"accountId": "111", "accountName": "acme"}]
+        roles = [{"roleName": "Admin"}]
+        ctx_ref = [None]
+        def _login(cmd):
+            ctx_ref[0]._files[real_cache] = real_token
+            return CmdResult(0)
+        cmds = {
+            "python3": _login,
+            "aws sso list-accounts": CmdResult(0, json.dumps({"accountList": accounts})),
+            "aws sso list-account-roles": CmdResult(0, json.dumps({"roleList": roles})),
+        }
+        ctx = MockSetupContext(
+            commands=cmds,
+            files={
+                config_path: "",
+                cache_file: '{"accessToken":"tmp","startUrl":"https://org.awsapps.com/start"}',
+            },
+            choices=[0],  # pick first account
+        )
+        ctx_ref[0] = ctx
+        acct, role = _discover_account_and_role(
+            ctx, "myprof", "https://org.awsapps.com/start", "us-east-1")
+        assert acct == "111"
+        assert role == "Admin"
+        # Temp token cache cleaned up
+        assert cache_file not in ctx._files
+        assert cache_file in ctx._removed
+
+
+# ===================================================================
+# TestRemoveTempTokenCache
+# ===================================================================
+
+class TestRemoveTempTokenCache:
+    def test_removes_sha1_named_cache_file(self):
+        """Removes the file named sha1(session_name).json from sso cache."""
+        import hashlib
+        home = str(Path.home())
+        session_name = "dev-setup-tmp"
+        cache_key = hashlib.sha1(session_name.encode("utf-8")).hexdigest()
+        cache_file = f"{home}/.aws/sso/cache/{cache_key}.json"
+        ctx = MockSetupContext(
+            files={cache_file: '{"accessToken":"old"}'},
+        )
+        _remove_temp_token_cache(ctx, session_name)
+        assert cache_file not in ctx._files
+        assert cache_file in ctx._removed
+
+    def test_no_error_when_file_missing(self):
+        """No error when cache file doesn't exist (remove_file handles FileNotFoundError)."""
+        ctx = MockSetupContext()
+        _remove_temp_token_cache(ctx, "nonexistent-setup-tmp")
+        # Just verifies no exception raised
+
+    def test_correct_hash_computation(self):
+        """Verify hash matches AWS CLI convention: sha1(session_name).hexdigest()."""
+        import hashlib
+        home = str(Path.home())
+        session_name = "bazel-proxy-test-setup-tmp"
+        expected_key = hashlib.sha1(session_name.encode("utf-8")).hexdigest()
+        expected_file = f"{home}/.aws/sso/cache/{expected_key}.json"
+        ctx = MockSetupContext(
+            files={expected_file: '{"accessToken":"stale"}'},
+        )
+        _remove_temp_token_cache(ctx, session_name)
+        assert expected_file in ctx._removed
 
 
 # ===================================================================

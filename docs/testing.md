@@ -24,7 +24,7 @@ tests/
 
 ## Test Coverage
 
-**461 passing tests** (22 s3proxy + 211 watcher + 52 monitor + 176 setup)
+**465 passing tests** (22 s3proxy + 211 watcher + 52 monitor + 180 setup)
 
 ### S3 Proxy Tests (`tests/unit/test_s3proxy.py`)
 
@@ -319,8 +319,11 @@ Uses `MockSetupContext` — subclass of `SetupContext` with in-memory filesystem
 - Preserves other profiles, preserves extra non-SSO keys
 - Existing sso-session → no overwrite
 
-**Discover Account and Role — `TestDiscoverAccountAndRole`** (4 tests):
-- Token not found, no accounts, no roles, temp config always cleaned
+**Discover Account and Role — `TestDiscoverAccountAndRole`** (5 tests):
+- Token not found, no accounts, no roles, temp config always cleaned, temp token cache cleaned on success
+
+**Remove Temp Token Cache — `TestRemoveTempTokenCache`** (3 tests):
+- Removes sha1-named cache file, no error when missing, correct hash computation
 
 **Do SSO Login — `TestDoSsoLogin`** (3 tests):
 - Success, failure, command contains profile

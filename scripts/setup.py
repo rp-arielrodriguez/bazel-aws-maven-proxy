@@ -1094,7 +1094,7 @@ sso_registration_scopes = sso:account:access
 
 
 def _remove_temp_config(ctx: SetupContext, config_path: Path, session_name: str) -> None:
-    """Remove temporary sso-session sections from config."""
+    """Remove temporary sso-session sections from config and cached token."""
     try:
         content = ctx.read_file(config_path)
     except (OSError, PermissionError):
@@ -1107,6 +1107,22 @@ def _remove_temp_config(ctx: SetupContext, config_path: Path, session_name: str)
         rf"\n?\[sso-session {re.escape(session_name)}\][^\[]*", "", cleaned
     )
     ctx.write_file(config_path, cleaned)
+    # Clean up the token cache file — AWS CLI stores it as sha1(session_name).json
+    _remove_temp_token_cache(ctx, session_name)
+
+
+def _remove_temp_token_cache(ctx: SetupContext, session_name: str) -> None:
+    """Remove the SSO token cache file for a temporary session.
+
+    AWS CLI computes token cache filenames as sha1(session_name).json
+    for modern sso-session profiles. Leftover temp tokens can confuse
+    startUrl-scanning lookups (e.g. the watcher's silent refresh).
+    """
+    import hashlib
+
+    cache_key = hashlib.sha1(session_name.encode("utf-8")).hexdigest()
+    cache_file = Path.home() / ".aws" / "sso" / "cache" / f"{cache_key}.json"
+    ctx.remove_file(cache_file)
 
 
 def configure_sso(ctx: SetupContext, profile: str) -> bool:
