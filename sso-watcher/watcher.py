@@ -753,6 +753,7 @@ def run_aws_sso_login(profile: str | None = None) -> int:
         bufsize=1,
     )
     webview_proc = None
+    let_webview_self_close = False
 
     try:
         # Extract the authorize URL from aws cli output
@@ -785,6 +786,8 @@ def run_aws_sso_login(profile: str | None = None) -> int:
                 output = proc.stdout.read() if proc.stdout else ""
                 if output.strip():
                     print(output.strip(), flush=True)
+                if rc == 0:
+                    let_webview_self_close = True
                 return rc
 
             # If webview exited, give aws a few seconds to finish (callback
@@ -814,6 +817,7 @@ def run_aws_sso_login(profile: str | None = None) -> int:
                 last_cred_check = now
                 if _check_credentials_valid(profile):
                     log.info("credentials valid during wait, giving aws time to finish token exchange...")
+                    let_webview_self_close = True
                     try:
                         proc.wait(timeout=WEBVIEW_CLOSE_GRACE_SECONDS)
                         output = proc.stdout.read() if proc.stdout else ""
@@ -835,7 +839,7 @@ def run_aws_sso_login(profile: str | None = None) -> int:
 
             time.sleep(0.5)
     finally:
-        if webview_proc is not None:
+        if webview_proc is not None and not let_webview_self_close:
             _kill_webview()
 
 
@@ -1040,6 +1044,7 @@ def _run_notify_login(profile: str) -> str:
         return "dismiss"
 
     aws_proc = None
+    let_webview_self_close = False
     try:
         # Wait for user action from webview stdout
         log.info(f"notify webview launched for {profile}")
@@ -1118,6 +1123,8 @@ def _run_notify_login(profile: str) -> str:
                 output = aws_proc.stdout.read() if aws_proc.stdout else ""
                 if output.strip():
                     print(output.strip(), flush=True)
+                if rc == 0:
+                    let_webview_self_close = True
                 return "success" if rc == 0 else "failed"
 
             # Check if webview exited (user closed window during auth)
@@ -1139,6 +1146,7 @@ def _run_notify_login(profile: str) -> str:
                 last_cred_check = now
                 if _check_credentials_valid(profile):
                     log.info("credentials valid during wait, giving aws time to finish token exchange...")
+                    let_webview_self_close = True
                     try:
                         aws_proc.wait(timeout=WEBVIEW_CLOSE_GRACE_SECONDS)
                         log.info("aws finished normally after cred detection")
@@ -1162,7 +1170,7 @@ def _run_notify_login(profile: str) -> str:
         if aws_proc and aws_proc.poll() is None:
             aws_proc.kill()
             aws_proc.wait()
-        if webview.poll() is None:
+        if not let_webview_self_close and webview.poll() is None:
             _kill_webview()
         try:
             webview.stdin.close()

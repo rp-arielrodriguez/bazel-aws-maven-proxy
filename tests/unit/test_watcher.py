@@ -973,7 +973,8 @@ class TestRunAwsSsoLogin:
              patch.object(watcher, '_kill_webview') as mock_kill:
             rc = watcher.run_aws_sso_login("test-profile")
             assert rc == 0
-            mock_kill.assert_called_once()
+            # Webview left to self-close on success (shows success page briefly)
+            mock_kill.assert_not_called()
 
     def test_success_falls_back_to_browser(self, tmp_path):
         proc = self._mock_aws_proc(returncode=0)
