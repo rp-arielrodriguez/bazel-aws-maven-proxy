@@ -1091,6 +1091,65 @@ class TestRunAwsSsoLogin:
             assert rc == -1
             proc.kill.assert_called_once()
 
+    def test_token_file_updated_triggers_secondary_exit(self):
+        """Token file mtime change triggers secondary exit with grace period."""
+        proc = MagicMock()
+        proc.stdout = iter([
+            "Browser will not be automatically opened.\n",
+            "\n",
+            "https://oidc.example.com/authorize?redirect_uri=http%3A%2F%2F127.0.0.1%3A9999%2Fcallback\n",
+        ])
+        proc.poll = MagicMock(return_value=None)  # aws never finishes on its own
+        proc.returncode = 0
+        readable_stdout = MagicMock()
+        readable_stdout.read.return_value = ""
+
+        def wait_side_effect(**kwargs):
+            proc.stdout = readable_stdout
+
+        proc.wait = MagicMock(side_effect=wait_side_effect)
+
+        call_count = [0]
+
+        def fake_time():
+            call_count[0] += 1
+            return 1000 + call_count[0]
+
+        # mtime: first call (snapshot) = 100, second call (poll check) = 200 (changed)
+        mtime_calls = [0]
+        def fake_mtime(profile):
+            mtime_calls[0] += 1
+            return 100 if mtime_calls[0] <= 1 else 200
+
+        with patch.object(watcher.subprocess, 'Popen', return_value=proc), \
+             patch.object(watcher, '_launch_webview', return_value=None), \
+             patch.object(watcher.subprocess, 'run'), \
+             patch.object(watcher, '_get_token_cache_mtime', side_effect=fake_mtime), \
+             patch('time.time', side_effect=fake_time), \
+             patch('time.sleep'):
+            rc = watcher.run_aws_sso_login("test-profile")
+            assert rc == 0
+
+    def test_stale_token_file_does_not_trigger_secondary_exit(self):
+        """Unchanged token file mtime does not trigger secondary exit."""
+        proc = MagicMock()
+        proc.stdout = iter([
+            "Browser will not be automatically opened.\n",
+            "\n",
+            "https://oidc.example.com/authorize?redirect_uri=http%3A%2F%2F127.0.0.1%3A9999%2Fcallback\n",
+        ])
+        proc.poll = MagicMock(return_value=None)
+        proc.kill = MagicMock()
+
+        with patch.object(watcher.subprocess, 'Popen', return_value=proc), \
+             patch.object(watcher, '_launch_webview', return_value=None), \
+             patch.object(watcher.subprocess, 'run'), \
+             patch.object(watcher, '_get_token_cache_mtime', return_value=100), \
+             patch.object(watcher, 'SSO_LOGIN_TIMEOUT', 0):  # immediate timeout
+            rc = watcher.run_aws_sso_login("test-profile")
+            assert rc == -1  # times out, no secondary exit triggered
+            proc.kill.assert_called()
+
     def test_uses_no_browser_flag(self):
         proc = MagicMock()
         proc.stdout = iter(["error\n"])
@@ -2080,6 +2139,37 @@ class TestCheckCredentialsValid:
 
 
 # ---------------------------------------------------------------------------
+# _get_token_cache_mtime
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestGetTokenCacheMtime:
+
+    def test_returns_mtime_when_file_exists(self, tmp_path):
+        cache_dir = tmp_path / ".aws" / "sso" / "cache"
+        cache_dir.mkdir(parents=True)
+        import hashlib
+        key = hashlib.sha1("my-session".encode("utf-8")).hexdigest()
+        token_file = cache_dir / f"{key}.json"
+        token_file.write_text("{}")
+        with patch.object(watcher, '_get_sso_session_config', return_value={"session_name": "my-session"}), \
+             patch.object(watcher, 'SSO_CACHE_DIR', cache_dir):
+            result = watcher._get_token_cache_mtime("my-profile")
+            assert result > 0
+
+    def test_returns_zero_when_no_session_name(self):
+        with patch.object(watcher, '_get_sso_session_config', return_value={}):
+            assert watcher._get_token_cache_mtime("my-profile") == 0
+
+    def test_returns_zero_when_file_missing(self, tmp_path):
+        cache_dir = tmp_path / ".aws" / "sso" / "cache"
+        cache_dir.mkdir(parents=True)
+        with patch.object(watcher, '_get_sso_session_config', return_value={"session_name": "missing"}), \
+             patch.object(watcher, 'SSO_CACHE_DIR', cache_dir):
+            assert watcher._get_token_cache_mtime("prof") == 0
+
+
+# ---------------------------------------------------------------------------
 # _launch_notify_webview
 # ---------------------------------------------------------------------------
 
@@ -2314,7 +2404,7 @@ class TestRunNotifyLogin:
              patch.object(watcher.subprocess, 'Popen', return_value=mock_aws), \
              patch.object(watcher, '_extract_authorize_url', return_value=url), \
              patch.object(watcher, '_extract_callback_host', return_value="127.0.0.1:2456"), \
-             patch.object(watcher, '_check_credentials_valid', return_value=False), \
+             patch.object(watcher, '_get_token_cache_mtime', return_value=100), \
              patch.object(watcher, '_kill_webview'), \
              patch('time.time') as mock_time, \
              patch('time.sleep'):
@@ -2326,8 +2416,8 @@ class TestRunNotifyLogin:
             assert result == "failed"
             mock_aws.kill.assert_called()
 
-    def test_credential_check_during_poll_returns_success(self):
-        """_check_credentials_valid finds valid creds during poll → grace period → success."""
+    def test_token_file_updated_during_poll_returns_success(self):
+        """Token file mtime change during poll → grace period → success."""
         mock_webview = MagicMock()
         mock_webview.stdout = iter(["SSO_ACTION:refresh\n"])
         mock_webview.stdin = MagicMock()
@@ -2347,11 +2437,17 @@ class TestRunNotifyLogin:
             # Return values that keep us within deadline but trigger cred check
             return 1000 + call_count[0]
 
+        # Simulate mtime change: first call (snapshot) returns 100, subsequent returns 200
+        mtime_calls = [0]
+        def fake_mtime(profile):
+            mtime_calls[0] += 1
+            return 100 if mtime_calls[0] <= 1 else 200
+
         with patch.object(watcher, '_launch_notify_webview', return_value=mock_webview), \
              patch.object(watcher.subprocess, 'Popen', return_value=mock_aws), \
              patch.object(watcher, '_extract_authorize_url', return_value=url), \
              patch.object(watcher, '_extract_callback_host', return_value="127.0.0.1:2456"), \
-             patch.object(watcher, '_check_credentials_valid', return_value=True), \
+             patch.object(watcher, '_get_token_cache_mtime', side_effect=fake_mtime), \
              patch.object(watcher, '_kill_webview'), \
              patch('time.time', side_effect=fake_time), \
              patch('time.sleep'):

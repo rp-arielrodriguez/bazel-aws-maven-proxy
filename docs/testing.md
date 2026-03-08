@@ -24,7 +24,7 @@ tests/
 
 ## Test Coverage
 
-**473 passing tests** (22 s3proxy + 219 watcher + 52 monitor + 180 setup)
+**478 passing tests** (22 s3proxy + 224 watcher + 52 monitor + 180 setup)
 
 ### S3 Proxy Tests (`tests/unit/test_s3proxy.py`)
 
@@ -121,10 +121,11 @@ tests/
 **Webview Launch — `TestLaunchWebview`** (3 tests):
 - Binary missing returns None, successful launch, Popen failure
 
-**SSO Login Flow — `TestRunAwsSsoLogin`** (8 tests):
+**SSO Login Flow — `TestRunAwsSsoLogin`** (10 tests):
 - Success with webview, fallback to browser, no URL returns -1
 - Timeout returns -1, login failure, webview killed on timeout
 - Webview close aborts login, uses --no-browser flag
+- Token file mtime triggers secondary exit, stale mtime does not
 
 **Silent Mode Handle Login — `TestSilentModeHandleLogin`** (8 tests):
 - Silent mode success/failure, notify/auto try silent first
@@ -153,6 +154,9 @@ tests/
 **Credential Check — `TestCheckCredentialsValid`** (5 tests):
 - Returns true/false on success/failure, exception handling, timeout, profile passed to command
 
+**Token Cache Mtime — `TestGetTokenCacheMtime`** (3 tests):
+- Returns mtime when file exists, zero when no session name, zero when file missing
+
 **Notify Webview Launch — `TestLaunchNotifyWebview`** (3 tests):
 - Binary missing returns None, mkdtemp failure, Popen failure cleanup
 
@@ -161,7 +165,7 @@ tests/
 - Webview actions: snooze, suppress, dismiss, window closed, no output
 - Webview refresh: URL extracted and sent, no URL returns failed, stdin write fails
 - Webview signals: SSO_TIMEOUT, SSO_ERROR:detail, unknown action, non-signal debug lines
-- Auth polling: timeout returns failed, credential check returns success
+- Auth polling: timeout returns failed, token file mtime change returns success
 - Webview exits during auth: aws finishes (success), aws hangs (dismiss)
 - Cleanup: aws_proc is None, finally closes stdout and calls cleanup
 

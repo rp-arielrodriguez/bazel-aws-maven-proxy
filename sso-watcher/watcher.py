@@ -710,6 +710,20 @@ def _launch_webview(url: str, callback_host: str) -> subprocess.Popen | None:
         return None
 
 
+def _get_token_cache_mtime(profile: str) -> float:
+    """Return mtime of the SSO token cache file for *profile*, or 0."""
+    import hashlib
+    session = _get_sso_session_config(profile)
+    name = session.get("session_name")
+    if not name:
+        return 0
+    path = SSO_CACHE_DIR / f"{hashlib.sha1(name.encode('utf-8')).hexdigest()}.json"
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0
+
+
 def _check_credentials_valid(profile: str) -> bool:
     """Quick check if AWS credentials are currently valid."""
     try:
@@ -735,10 +749,11 @@ def run_aws_sso_login(profile: str | None = None) -> int:
     storage (Google/IdP credentials cached), no browser tab pollution,
     and auto-close on callback detection.
 
-    Secondary exit: if aws sso login hangs but credentials become valid
-    (e.g. after sleep/wake where the CLI stalls on token exchange), we
-    detect this via periodic sts get-caller-identity checks and exit
-    successfully.
+    Secondary exit: if aws sso login hangs but the token cache file is
+    updated (e.g. after sleep/wake where the CLI stalls after writing
+    tokens), we detect this via mtime comparison and exit successfully.
+    Using mtime instead of STS avoids false positives where an old
+    (not-yet-expired) access token passes but the refresh token is stale.
 
     Args:
         profile: AWS profile to use (defaults to PROFILE env var)
@@ -749,6 +764,9 @@ def run_aws_sso_login(profile: str | None = None) -> int:
     profile = profile or PROFILE
     cmd = ["aws", "sso", "login", "--no-browser", "--profile", profile]
     log.info(f"running: {' '.join(cmd)} (timeout={SSO_LOGIN_TIMEOUT}s)")
+
+    # Snapshot token file mtime so we can detect when aws writes new tokens
+    token_mtime_before = _get_token_cache_mtime(profile)
 
     proc = subprocess.Popen(
         cmd,
@@ -784,7 +802,7 @@ def run_aws_sso_login(profile: str | None = None) -> int:
 
         # Poll aws process, also watch for webview exit (user closed window)
         deadline = time.time() + SSO_LOGIN_TIMEOUT
-        last_cred_check = 0
+        last_token_check = 0
         while True:
             rc = proc.poll()
             if rc is not None:
@@ -812,23 +830,25 @@ def run_aws_sso_login(profile: str | None = None) -> int:
                     proc.wait()
                     return -1
 
-            # Secondary exit: credentials became valid while aws CLI hangs.
-            # This handles post-sleep scenarios where the CLI stalls on
-            # token exchange but auth actually succeeded (webview shows portal).
-            # Give aws a grace period to finish writing fresh tokens (including
-            # the refresh token needed for silent refresh later).
+            # Secondary exit: detect that aws wrote fresh tokens to the cache
+            # file. We compare the file's mtime against the snapshot taken
+            # before starting aws sso login. This avoids a false positive
+            # where an old (not-yet-expired) access token passes an STS check
+            # even though the CLI hasn't finished the PKCE exchange — which
+            # would leave a stale refresh token in the cache.
             now = time.time()
-            if now - last_cred_check >= CRED_CHECK_INTERVAL_SECONDS:
-                last_cred_check = now
-                if _check_credentials_valid(profile):
-                    log.info("credentials valid during wait, giving aws time to finish token exchange...")
+            if now - last_token_check >= CRED_CHECK_INTERVAL_SECONDS:
+                last_token_check = now
+                current_mtime = _get_token_cache_mtime(profile)
+                if current_mtime > token_mtime_before:
+                    log.info("token file updated, giving aws time to finish...")
                     let_webview_self_close = True
                     try:
                         proc.wait(timeout=WEBVIEW_CLOSE_GRACE_SECONDS)
                         output = proc.stdout.read() if proc.stdout else ""
                         if output.strip():
                             print(output.strip(), flush=True)
-                        log.info("aws finished normally after cred detection")
+                        log.info("aws finished normally after token update")
                         return proc.returncode
                     except subprocess.TimeoutExpired:
                         log.info("aws did not finish in grace period, killing")
@@ -1117,6 +1137,9 @@ def _run_notify_login(profile: str) -> str:
         cmd = ["aws", "sso", "login", "--no-browser", "--profile", profile]
         log.info(f"running: {' '.join(cmd)}")
 
+        # Snapshot token file mtime to detect when aws writes new tokens
+        token_mtime_before = _get_token_cache_mtime(profile)
+
         aws_proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -1156,7 +1179,7 @@ def _run_notify_login(profile: str) -> str:
 
         # Now poll aws process for completion, same as run_aws_sso_login
         deadline = time.time() + SSO_LOGIN_TIMEOUT
-        last_cred_check = 0
+        last_token_check = 0
         while True:
             rc = aws_proc.poll()
             if rc is not None:
@@ -1178,18 +1201,19 @@ def _run_notify_login(profile: str) -> str:
                     aws_proc.wait()
                     return "dismiss"
 
-            # Secondary exit: credentials became valid.
-            # Give aws a grace period to finish writing fresh tokens
-            # (including refresh token for silent refresh later).
+            # Secondary exit: detect that aws wrote fresh tokens to cache.
+            # Uses mtime comparison instead of STS to avoid false positives
+            # where an old access token passes but refresh token is stale.
             now = time.time()
-            if now - last_cred_check >= CRED_CHECK_INTERVAL_SECONDS:
-                last_cred_check = now
-                if _check_credentials_valid(profile):
-                    log.info("credentials valid during wait, giving aws time to finish token exchange...")
+            if now - last_token_check >= CRED_CHECK_INTERVAL_SECONDS:
+                last_token_check = now
+                current_mtime = _get_token_cache_mtime(profile)
+                if current_mtime > token_mtime_before:
+                    log.info("token file updated, giving aws time to finish...")
                     let_webview_self_close = True
                     try:
                         aws_proc.wait(timeout=WEBVIEW_CLOSE_GRACE_SECONDS)
-                        log.info("aws finished normally after cred detection")
+                        log.info("aws finished normally after token update")
                         return "success" if aws_proc.returncode == 0 else "failed"
                     except subprocess.TimeoutExpired:
                         log.info("aws did not finish in grace period, killing")
@@ -1370,6 +1394,9 @@ def main() -> int:
                         write_last_run(time.time())
                         clear_signal()
                         proactive_failures = 0  # reset so proactive refresh works again
+                        # Reset proactive timer so it doesn't immediately re-check
+                        # the token that was just refreshed via interactive login
+                        last_proactive_check = time.time()
                         log.info("login successful, signal cleared")
                     elif result.startswith("snooze:"):
                         try:
