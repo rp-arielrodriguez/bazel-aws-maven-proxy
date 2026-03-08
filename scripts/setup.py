@@ -13,6 +13,26 @@ from pathlib import Path
 from typing import Optional
 
 
+def _ensure_tty() -> None:
+    """Reopen stdin from /dev/tty when piped (e.g. curl | bash).
+
+    When running via ``curl -sL .../install.sh | bash``, stdin is the
+    script content from the pipe.  Python's ``input()`` and Rich's
+    ``Prompt.ask()`` both read from ``sys.stdin``, so they'd consume
+    script lines instead of user input.
+
+    This is the standard fix used by rustup, Homebrew, and similar
+    installers that support ``curl | bash``.
+    """
+    if sys.stdin.isatty():
+        return
+    try:
+        tty = open("/dev/tty", "r")  # noqa: SIM115
+        sys.stdin = tty
+    except OSError:
+        pass  # no terminal (CI, headless SSH, etc.)
+
+
 def _ensure_rich() -> bool:
     """Install Rich if missing. Returns True if available."""
     try:
@@ -512,6 +532,7 @@ def prompt_env_config(ctx: SetupContext, container_engine: str = "") -> EnvConfi
         ctx.print("  Available AWS profiles:")
         for p in profiles:
             ctx.print(f"    - {p}")
+        ctx.print("  Type an existing name to use it, or enter a new name to create one.")
         ctx.print("")
 
     config = EnvConfig()
@@ -1462,6 +1483,7 @@ def run_setup(ctx: SetupContext) -> int:
 
 def main() -> None:
     global _RICH_AVAILABLE
+    _ensure_tty()
     _RICH_AVAILABLE = _ensure_rich()
     try:
         ctx = SetupContext()

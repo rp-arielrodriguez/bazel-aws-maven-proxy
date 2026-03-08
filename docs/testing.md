@@ -24,7 +24,7 @@ tests/
 
 ## Test Coverage
 
-**479 passing tests** (22 s3proxy + 224 watcher + 52 monitor + 181 setup)
+**482 passing tests** (22 s3proxy + 224 watcher + 52 monitor + 184 setup)
 
 ### S3 Proxy Tests (`tests/unit/test_s3proxy.py`)
 
@@ -229,6 +229,9 @@ tests/
 ### Setup Tests (`tests/unit/test_setup.py`)
 
 Uses `MockSetupContext` — subclass of `SetupContext` with in-memory filesystem, configurable command results, and FIFO prompt queues. No real commands executed, no filesystem touched.
+
+**TTY Reconnection — `TestEnsureTty`** (3 tests):
+- Noop when stdin is a TTY, reopens from `/dev/tty` when piped, graceful fallback when no TTY
 
 **AWS Version Parsing — `TestParseAwsVersion`** (3 tests):
 - Standard format, no match, empty

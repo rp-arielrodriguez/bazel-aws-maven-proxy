@@ -327,13 +327,13 @@ mise run containers:restart
 |----------|-------------|
 | [docs/sso-watcher.md](docs/sso-watcher.md) | SSO watcher architecture and internals |
 | [docs/state-machine.md](docs/state-machine.md) | State diagrams (Mermaid) for modes, signals, cooldown |
-| [docs/testing.md](docs/testing.md) | Test structure and coverage (479 tests) |
+| [docs/testing.md](docs/testing.md) | Test structure and coverage (482 tests) |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute |
 
 ## Testing
 
 ```bash
-pytest              # Run all 479 tests
+pytest              # Run all 482 tests
 ./run_tests.sh      # Helper script
 ```
 

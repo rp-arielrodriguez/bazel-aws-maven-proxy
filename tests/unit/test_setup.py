@@ -21,6 +21,7 @@ from setup import (
     SsoCheckResult,
     _clear_sso_cache,
     _discover_account_and_role,
+    _ensure_tty,
     _find_sso_access_token,
     _read_aws_config,
     _sso_list_accounts,
@@ -191,6 +192,61 @@ class MockSetupContext(SetupContext):
 def output_text(ctx: MockSetupContext) -> str:
     """Join all output lines for assertion."""
     return "\n".join(ctx.get_output())
+
+
+# ===================================================================
+# TestEnsureTty
+# ===================================================================
+
+class TestEnsureTty:
+    """Tests for _ensure_tty(): reopen stdin from /dev/tty when piped."""
+
+    def test_noop_when_stdin_is_tty(self, monkeypatch):
+        """When stdin is already a TTY, _ensure_tty does nothing."""
+        import io
+        fake = io.StringIO("hello")
+        fake.isatty = lambda: True
+        monkeypatch.setattr("sys.stdin", fake)
+        _ensure_tty()
+        assert sys.stdin is fake  # unchanged
+
+    def test_reopens_when_piped(self, monkeypatch, tmp_path):
+        """When stdin is piped, reopen from /dev/tty."""
+        import io
+        piped = io.StringIO("pipe content")
+        piped.isatty = lambda: False
+        monkeypatch.setattr("sys.stdin", piped)
+
+        # Mock open("/dev/tty") to return a fake file
+        tty_file = io.StringIO("tty content")
+        original_open = open
+
+        def fake_open(path, *a, **kw):
+            if path == "/dev/tty":
+                return tty_file
+            return original_open(path, *a, **kw)
+
+        monkeypatch.setattr("builtins.open", fake_open)
+        _ensure_tty()
+        assert sys.stdin is tty_file
+
+    def test_no_crash_when_no_tty(self, monkeypatch):
+        """When /dev/tty is unavailable (CI), silently skip."""
+        import io
+        piped = io.StringIO("pipe content")
+        piped.isatty = lambda: False
+        monkeypatch.setattr("sys.stdin", piped)
+
+        original_open = open
+
+        def fail_open(path, *a, **kw):
+            if path == "/dev/tty":
+                raise OSError("no tty")
+            return original_open(path, *a, **kw)
+
+        monkeypatch.setattr("builtins.open", fail_open)
+        _ensure_tty()
+        assert sys.stdin is piped  # unchanged
 
 
 # ===================================================================
@@ -449,6 +505,7 @@ class TestPromptEnvConfig:
         out = output_text(ctx)
         assert "foo" in out
         assert "bar" in out
+        assert "Type an existing name" in out
 
     def test_tls_skip_false_no_engine(self):
         """No container engine → skip_tls_verify stays False."""
