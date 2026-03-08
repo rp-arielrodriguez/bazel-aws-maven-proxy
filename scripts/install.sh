@@ -68,6 +68,8 @@ echo ""
 
 # ---- Install tools ----
 info "Installing tools via mise..."
+# Create empty .env if missing — mise.toml references it via _.file
+touch .env
 mise install --yes 2>&1 | tail -1
 ok "Tools ready"
 echo ""
