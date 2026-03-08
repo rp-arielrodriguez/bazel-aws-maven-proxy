@@ -70,6 +70,8 @@ echo ""
 info "Installing tools via mise..."
 # Create empty .env if missing — mise.toml references it via _.file
 touch .env
+# Trust the config so mise doesn't reject it in a new clone
+mise trust --yes 2>/dev/null || mise trust 2>/dev/null || true
 mise install --yes 2>&1 | tail -1
 ok "Tools ready"
 echo ""
