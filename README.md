@@ -37,18 +37,60 @@ S3 Proxy + Monitor reload credentials (no restart)
 
 See [docs/sso-watcher.md](docs/sso-watcher.md) for details.
 
-## Quick Start
+## Install
 
 ### Prerequisites
 
+Install these before running the installer:
+
 - [mise](https://mise.jdx.dev/) (`brew install mise`) — manages Python and project tasks
-- [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) >= 2.9 (`brew install awscli`) — not managed by mise (no native ARM macOS build available via mise)
-- Podman (preferred) or Docker
+- [AWS CLI v2](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html) >= 2.9 (`brew install awscli`)
+- Podman (`brew install podman`) or Docker
 - Xcode Command Line Tools (`xcode-select --install`) — for building the login webview
+
+### One-line install
+
+Clones repo, runs interactive setup wizard, creates global `bazel-proxy` command:
+
+```bash
+curl -sL https://raw.githubusercontent.com/rp-arielrodriguez/bazel-aws-maven-proxy/main/scripts/install.sh | bash
+```
+
+Customize install location:
+
+```bash
+# Default: ~/.bazel-aws-maven-proxy (repo) + ~/.local/bin/bazel-proxy (shim)
+curl -sL .../install.sh | INSTALL_DIR=~/projects/bazel-proxy bash
+```
+
+After install, operate from anywhere:
+
+```bash
+bazel-proxy start       # Start everything
+bazel-proxy stop        # Stop everything
+bazel-proxy status      # Dashboard: running, mode, credentials
+bazel-proxy login       # Trigger SSO login
+bazel-proxy logout      # Invalidate credentials, trigger renewal
+bazel-proxy logs        # View watcher logs
+bazel-proxy upgrade     # Smart upgrade (pull + selective rebuild)
+bazel-proxy help        # All commands
+```
+
+Re-running the installer updates an existing installation (git pull + setup).
+
+<details>
+<summary>Manual setup (from cloned repo)</summary>
+
+### 1. Clone and enter repo
+
+```bash
+git clone https://github.com/rp-arielrodriguez/bazel-aws-maven-proxy.git
+cd bazel-aws-maven-proxy
+```
 
 > **Note:** Python 3.11 is managed by mise and installed automatically on `mise install`.
 
-### 1. Run setup
+### 2. Run setup
 
 ```bash
 mise run setup
@@ -98,7 +140,9 @@ mise run start              # Containers
 ```
 </details>
 
-### 2. Configure Bazel
+</details>
+
+## Configure Bazel
 
 **.bazelrc**:
 ```
@@ -159,6 +203,8 @@ mise run upgrade                         # Smart upgrade (pull + selective rebui
 ```bash
 mise run sso-install          # Install watcher (launchd agent)
 mise run sso-uninstall        # Uninstall
+mise run sso-start            # Start watcher (lightweight, no reinstall)
+mise run sso-stop             # Stop watcher (without uninstalling)
 mise run sso-status           # Dashboard: running, mode, credentials
 mise run sso-login            # Trigger login (dialog or direct per mode)
 mise run sso-logout           # Invalidate credentials, trigger renewal
@@ -281,13 +327,13 @@ mise run containers:restart
 |----------|-------------|
 | [docs/sso-watcher.md](docs/sso-watcher.md) | SSO watcher architecture and internals |
 | [docs/state-machine.md](docs/state-machine.md) | State diagrams (Mermaid) for modes, signals, cooldown |
-| [docs/testing.md](docs/testing.md) | Test structure and coverage (478 tests) |
+| [docs/testing.md](docs/testing.md) | Test structure and coverage (479 tests) |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute |
 
 ## Testing
 
 ```bash
-pytest              # Run all 478 tests
+pytest              # Run all 479 tests
 ./run_tests.sh      # Helper script
 ```
 

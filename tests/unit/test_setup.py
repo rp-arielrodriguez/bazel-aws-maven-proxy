@@ -819,8 +819,8 @@ class TestCheckMacosPermissions:
     def _osascript_dialog(self):
         return (
             "osascript", "-e",
-            'display dialog "Setup complete — SSO watcher permissions verified." '
-            'buttons {"OK"} default button "OK"'
+            'tell application "System Events" to get name of first process '
+            'whose frontmost is true'
         )
 
     def test_all_ok(self):
@@ -1481,21 +1481,38 @@ class TestStartContainers:
     def test_user_says_yes(self):
         ctx = MockSetupContext(
             confirms=[True],
-            commands={("mise", "run", "containers:up"): CmdResult(0)},
+            commands={
+                "bash": CmdResult(1),  # _containers_running → not running
+                ("mise", "run", "containers:up"): CmdResult(0),
+            },
         )
         assert start_containers(ctx) is True
 
     def test_user_says_no(self):
-        ctx = MockSetupContext(confirms=[False])
+        ctx = MockSetupContext(
+            confirms=[False],
+            commands={"bash": CmdResult(1)},  # not running
+        )
         assert start_containers(ctx) is False
 
     def test_start_fails(self):
         ctx = MockSetupContext(
             confirms=[True],
-            commands={("mise", "run", "containers:up"): CmdResult(1, "", "error")},
+            commands={
+                "bash": CmdResult(1),  # not running
+                ("mise", "run", "containers:up"): CmdResult(1, "", "error"),
+            },
         )
         assert start_containers(ctx) is False
         assert any("failed" in m.lower() for m in ctx.get_output())
+
+    def test_skips_when_already_running(self):
+        """Containers already running → skip prompt, return True."""
+        ctx = MockSetupContext(
+            commands={"bash": CmdResult(0, "s3proxy\nsso-monitor\n")},
+        )
+        assert start_containers(ctx) is True
+        assert any("already running" in m.lower() for m in ctx.get_output())
 
 
 # ===================================================================
@@ -1647,8 +1664,8 @@ class TestRunSetup:
         )
         osascript_dlg = (
             "osascript", "-e",
-            'display dialog "Setup complete — SSO watcher permissions verified." '
-            'buttons {"OK"} default button "OK"'
+            'tell application "System Events" to get name of first process '
+            'whose frontmost is true'
         )
         ctx = self._all_tools_ctx(
             extra_commands={

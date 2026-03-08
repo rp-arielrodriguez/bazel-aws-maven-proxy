@@ -8,6 +8,12 @@ This project provides a transparent proxy layer between Bazel builds and S3-host
 
 ## Key Commands
 
+### Global command (after install.sh)
+
+```bash
+bazel-proxy start|stop|status|login|logs|upgrade|help  # Operate from anywhere
+```
+
 ### Starting and Managing Services
 
 ```bash
@@ -34,6 +40,8 @@ podman compose down       # Stop services
 ```bash
 mise run sso-install          # Install watcher (launchd agent)
 mise run sso-uninstall        # Uninstall
+mise run sso-start            # Start watcher (lightweight, no reinstall)
+mise run sso-stop             # Stop watcher (without uninstalling)
 mise run sso-status           # Dashboard: running, mode, credentials
 mise run sso-login            # Trigger login (dialog or direct per mode)
 mise run sso-logout           # Invalidate credentials, trigger renewal
@@ -231,7 +239,7 @@ maven_install(
 
 Run tests:
 ```bash
-pytest              # All tests (478)
+pytest              # All tests (479)
 ./run_tests.sh      # Helper script
 ```
 

@@ -79,8 +79,8 @@ echo ""
 # Create LaunchAgents directory if it doesn't exist
 mkdir -p "$HOME/Library/LaunchAgents"
 
-# Replace placeholders in template
-sed -e "s|{{PYTHON_PATH}}|$PYTHON_PATH|g" \
+# Generate new plist content
+NEW_PLIST=$(sed -e "s|{{PYTHON_PATH}}|$PYTHON_PATH|g" \
     -e "s|{{REPO_PATH}}|$REPO_PATH|g" \
     -e "s|{{HOME}}|$HOME|g" \
     -e "s|{{AWS_PROFILE}}|$AWS_PROFILE|g" \
@@ -88,8 +88,18 @@ sed -e "s|{{PYTHON_PATH}}|$PYTHON_PATH|g" \
     -e "s|{{SSO_POLL_SECONDS}}|$SSO_POLL_SECONDS|g" \
     -e "s|{{SSO_LOGIN_MODE}}|$SSO_LOGIN_MODE|g" \
     -e "s|{{SSO_PROACTIVE_REFRESH_MINUTES}}|${SSO_PROACTIVE_REFRESH_MINUTES:-30}|g" \
-    "$PLIST_TEMPLATE" > "$PLIST_DEST"
+    "$PLIST_TEMPLATE")
 
+# Compare with existing plist — skip reload if identical
+PLIST_CHANGED=true
+if [ -f "$PLIST_DEST" ]; then
+    EXISTING_PLIST=$(cat "$PLIST_DEST")
+    if [ "$NEW_PLIST" = "$EXISTING_PLIST" ]; then
+        PLIST_CHANGED=false
+    fi
+fi
+
+echo "$NEW_PLIST" > "$PLIST_DEST"
 echo "✓ Installed plist to: $PLIST_DEST"
 
 # Load launchd agent
@@ -108,18 +118,15 @@ if ! launchctl print "$DOMAIN" &>/dev/null 2>&1; then
 fi
 
 if launchctl print "$DOMAIN/$LABEL" &>/dev/null; then
-    echo "Agent already loaded, updating..."
-
-    # Bootout to unload
-    launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
-
-    # Bootstrap with new config
-    launchctl bootstrap "$DOMAIN" "$PLIST_DEST"
-
-    # Kickstart to ensure it starts immediately
-    launchctl kickstart -k "$DOMAIN/$LABEL" 2>/dev/null || true
-
-    echo "✓ Updated and restarted launchd agent"
+    if $PLIST_CHANGED; then
+        echo "Config changed, restarting agent..."
+        launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
+        launchctl bootstrap "$DOMAIN" "$PLIST_DEST"
+        launchctl kickstart -k "$DOMAIN/$LABEL" 2>/dev/null || true
+        echo "✓ Updated and restarted launchd agent"
+    else
+        echo "✓ Agent already running, no config changes"
+    fi
 else
     echo "Loading new agent..."
     launchctl bootstrap "$DOMAIN" "$PLIST_DEST"

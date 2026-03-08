@@ -22,8 +22,12 @@ else
 fi
 
 # Clean up webview app bundle
-rm -rf "$HOME/.aws/sso-renewer/bin"
-echo "✓ Removed webview app bundle"
+if [ -d "$HOME/.aws/sso-renewer/bin" ]; then
+    rm -rf "$HOME/.aws/sso-renewer/bin"
+    echo "✓ Removed webview app bundle"
+else
+    echo "  Webview app bundle not found"
+fi
 
 echo ""
 echo "SSO watcher uninstalled"

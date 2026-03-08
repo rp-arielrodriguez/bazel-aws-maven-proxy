@@ -24,7 +24,7 @@ tests/
 
 ## Test Coverage
 
-**478 passing tests** (22 s3proxy + 224 watcher + 52 monitor + 180 setup)
+**479 passing tests** (22 s3proxy + 224 watcher + 52 monitor + 181 setup)
 
 ### S3 Proxy Tests (`tests/unit/test_s3proxy.py`)
 
@@ -296,8 +296,8 @@ Uses `MockSetupContext` — subclass of `SetupContext` with in-memory filesystem
 - SSO not configured skip, credentials valid, login success/fail
 - Mode file save/restore, S3 validation success/fail/skip, failure restores mode
 
-**Start Containers — `TestStartContainers`** (3 tests):
-- User yes, no, command fails
+**Start Containers — `TestStartContainers`** (4 tests):
+- User yes, no, command fails, skips when already running
 
 **Print Summary — `TestPrintSummary`** (2 tests):
 - Port in output, commands in output

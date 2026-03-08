@@ -728,11 +728,14 @@ def check_macos_permissions(ctx: SetupContext) -> dict:
         ctx.print("")
         return result
 
-    # Dialog display — verifies the app can show UI (non-fatal)
+    # Dialog display — verifies the app can show UI (non-fatal).
+    # Use a silent test (get frontmost process name) instead of popping up a
+    # dialog box. This avoids the annoying "OK" dialog on re-runs while still
+    # exercising the Automation permission.
     r = ctx.run_cmd([
         "osascript", "-e",
-        'display dialog "Setup complete — SSO watcher permissions verified." '
-        'buttons {"OK"} default button "OK"'
+        'tell application "System Events" to get name of first process '
+        'whose frontmost is true'
     ], timeout=PERMISSION_TIMEOUT)
     if r.ok:
         ctx.ok("Dialog permissions")
@@ -1327,8 +1330,24 @@ def first_login_and_validate(ctx: SetupContext, config: EnvConfig,
 # Phase 8: Start containers
 # ---------------------------------------------------------------------------
 
+def _containers_running(ctx: SetupContext) -> bool:
+    """Check if proxy containers are already running and healthy."""
+    r = ctx.run_cmd(["bash", "-c",
+                     "source scripts/container-engine.sh && "
+                     "$COMPOSE_CMD ps --status running --format '{{.Name}}' 2>/dev/null"],
+                    timeout=15)
+    if not r.ok:
+        return False
+    names = [n.strip() for n in r.stdout.strip().splitlines() if n.strip()]
+    return len(names) >= 2  # s3proxy + sso-monitor
+
+
 def start_containers(ctx: SetupContext) -> bool:
     """Phase 8: Optionally start containers. Returns True if started."""
+    if _containers_running(ctx):
+        ctx.ok("Containers already running")
+        return True
+
     if not ctx.confirm("Start containers now?", default=True):
         return False
 

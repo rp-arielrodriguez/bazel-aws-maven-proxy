@@ -18,11 +18,42 @@ run = "bash scripts/setup.sh"
 
 [tasks.start]
 description = "Start complete system (containers + SSO watcher)"
-depends = ["containers:up", "sso-install"]
+depends = ["containers:up", "sso-start"]
 
 [tasks.stop]
 description = "Stop services (containers + watcher agent)"
-depends = ["containers:down"]
+depends = ["containers:down", "sso-stop"]
+
+[tasks."sso-start"]
+description = "Start SSO watcher (bootstrap if installed, full install if not)"
+run = """
+set -euo pipefail
+USER_ID=$(id -u)
+LABEL="com.bazel.sso-watcher"
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+
+if [ ! -f "$PLIST" ]; then
+  echo "SSO watcher not installed — running full install..."
+  bash scripts/sso-install.sh
+  exit $?
+fi
+
+# Check if GUI domain is available
+if ! launchctl print "gui/$USER_ID" &>/dev/null 2>&1; then
+  echo "✓ SSO watcher plist present (no GUI session — will start on login)"
+  exit 0
+fi
+
+if launchctl print "gui/$USER_ID/$LABEL" &>/dev/null; then
+  echo "✓ SSO watcher already running"
+else
+  launchctl bootstrap "gui/$USER_ID" "$PLIST"
+  echo "✓ SSO watcher started"
+fi
+"""
+
+[tasks."sso-stop"]
+description = "Stop SSO watcher (without uninstalling)"
 run = """
 set -euo pipefail
 USER_ID=$(id -u)
