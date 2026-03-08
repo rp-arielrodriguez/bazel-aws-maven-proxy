@@ -59,7 +59,7 @@ curl -sL https://raw.githubusercontent.com/rp-arielrodriguez/bazel-aws-maven-pro
 Customize install location:
 
 ```bash
-# Default: ~/.bazel-aws-maven-proxy (repo) + ~/.local/bin/bazel-proxy (shim)
+# Default: ~/.local/share/bazel-proxy (repo) + ~/.local/bin/bazel-proxy (shim)
 curl -sL .../install.sh | INSTALL_DIR=~/projects/bazel-proxy bash
 ```
 
