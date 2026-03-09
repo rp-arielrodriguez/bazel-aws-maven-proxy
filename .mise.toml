@@ -69,8 +69,13 @@ fi
 [tasks.uninstall]
 description = "Uninstall complete system (containers + SSO watcher)"
 run = """
-mise run containers:down || true
-mise run sso-uninstall
+# Stop containers first (if compose file exists)
+if [ -f "docker-compose.yaml" ] || [ -f "docker-compose.yml" ]; then
+    source scripts/container-engine.sh
+    $COMPOSE_CMD down
+fi
+# Then uninstall everything else
+bash scripts/sso-uninstall.sh
 """
 
 [tasks."containers:up"]
