@@ -797,6 +797,60 @@ func clearCookies() {
     fflush(stdout)
 }
 
+// MARK: - App icon (programmatic — no .icns file needed)
+
+enum AppIcon {
+    /// Generate a 256x256 dock icon: rounded green square with a white
+    /// lightning-bolt key — "recharge your credentials".
+    static func generate() -> NSImage {
+        let size: CGFloat = 256
+        let image = NSImage(size: NSSize(width: size, height: size))
+        image.lockFocus()
+
+        let rect = NSRect(x: 0, y: 0, width: size, height: size)
+        let cornerRadius: CGFloat = size * 0.22
+        let path = NSBezierPath(roundedRect: rect, xRadius: cornerRadius, yRadius: cornerRadius)
+
+        let gradient = NSGradient(
+            starting: NSColor(red: 0.18, green: 0.72, blue: 0.35, alpha: 1.0),
+            ending:   NSColor(red: 0.10, green: 0.55, blue: 0.28, alpha: 1.0)
+        )
+        gradient?.draw(in: path, angle: -90)
+
+        NSColor(white: 0.0, alpha: 0.12).setStroke()
+        path.lineWidth = 2
+        path.stroke()
+
+        let bolt = NSBezierPath()
+        let cx: CGFloat = size * 0.50
+        let cy: CGFloat = size * 0.50
+        let s: CGFloat = size * 0.30
+        bolt.move(to: NSPoint(x: cx + s * 0.05,  y: cy + s * 1.0))
+        bolt.line(to: NSPoint(x: cx - s * 0.30,   y: cy + s * 0.10))
+        bolt.line(to: NSPoint(x: cx + s * 0.05,   y: cy + s * 0.15))
+        bolt.line(to: NSPoint(x: cx - s * 0.05,   y: cy - s * 1.0))
+        bolt.line(to: NSPoint(x: cx + s * 0.30,   y: cy - s * 0.10))
+        bolt.line(to: NSPoint(x: cx - s * 0.05,   y: cy - s * 0.15))
+        bolt.close()
+
+        NSColor.white.setFill()
+        bolt.fill()
+
+        let keyR: CGFloat = size * 0.06
+        let keyCenter = NSPoint(x: cx - s * 0.05, y: cy - s * 1.0 + keyR * 1.8)
+        let keyPath = NSBezierPath(ovalIn: NSRect(
+            x: keyCenter.x - keyR, y: keyCenter.y - keyR,
+            width: keyR * 2, height: keyR * 2
+        ))
+        NSColor.white.setStroke()
+        keyPath.lineWidth = size * 0.02
+        keyPath.stroke()
+
+        image.unlockFocus()
+        return image
+    }
+}
+
 // MARK: - Entry point
 
 if CommandLine.arguments.count >= 2 && CommandLine.arguments[1] == "--clear-cookies" {
@@ -813,6 +867,7 @@ Darwin.signal(SIGPIPE, SIG_IGN)
 
 let app = NSApplication.shared
 app.setActivationPolicy(.regular)
+app.applicationIconImage = AppIcon.generate()
 
 let delegate = SSOAppDelegate(config: config)
 app.delegate = delegate
