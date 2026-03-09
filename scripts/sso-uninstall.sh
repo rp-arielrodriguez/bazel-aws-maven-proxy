@@ -39,5 +39,14 @@ else
     echo "  bazel-proxy command not found in $BIN_DIR"
 fi
 
+# Remove installation directory
+INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/share/bazel-proxy}"
+if [ -d "$INSTALL_DIR" ]; then
+    rm -rf "$INSTALL_DIR"
+    echo "✓ Removed installation directory $INSTALL_DIR"
+else
+    echo "  Installation directory not found"
+fi
+
 echo ""
 echo "SSO watcher uninstalled"
