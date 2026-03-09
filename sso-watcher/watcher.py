@@ -825,6 +825,13 @@ def run_aws_sso_login(profile: str | None = None) -> int:
                         print(output.strip(), flush=True)
                     return proc.returncode
                 except subprocess.TimeoutExpired:
+                    # Webview may have self-closed on callback — check tokens
+                    current_mtime = _get_token_cache_mtime(profile)
+                    if current_mtime > token_mtime_before:
+                        log.info("token file updated after webview close, killing aws")
+                        proc.kill()
+                        proc.wait()
+                        return 0
                     log.info("aws did not finish after webview close, aborting")
                     proc.kill()
                     proc.wait()
@@ -1200,13 +1207,23 @@ def _run_notify_login(profile: str) -> str:
                     let_webview_self_close = True
                 return "success" if rc == 0 else "failed"
 
-            # Check if webview exited (user closed window during auth)
+            # Check if webview exited (user closed window during auth).
+            # This can mean: (a) user closed the window, OR (b) webview
+            # detected the OAuth callback and self-closed (the good case).
             if webview.poll() is not None:
                 log.info("webview closed during auth")
                 try:
                     aws_proc.wait(timeout=WEBVIEW_CLOSE_GRACE_SECONDS)
                     return "success" if aws_proc.returncode == 0 else "failed"
                 except subprocess.TimeoutExpired:
+                    # aws didn't finish in time — but maybe it already wrote
+                    # tokens (webview self-closed on callback = auth completed)
+                    current_mtime = _get_token_cache_mtime(profile)
+                    if current_mtime > token_mtime_before:
+                        log.info("token file updated after webview close, killing aws")
+                        aws_proc.kill()
+                        aws_proc.wait()
+                        return "success"
                     aws_proc.kill()
                     aws_proc.wait()
                     return "dismiss"
