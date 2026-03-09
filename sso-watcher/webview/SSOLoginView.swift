@@ -88,6 +88,10 @@ final class SSONavigationDelegate: NSObject, WKNavigationDelegate {
     private let maxPortalRetries = 1
     private var frameLoadRetryCount = 0
     private let maxFrameLoadRetries = 2
+    /// Earliest time a callback redirect should be trusted.
+    /// Prevents false callback detection during rapid OIDC redirect chains
+    /// that hit the callback URL before the user completes auth.
+    var callbackEarliestTime: Date = .distantPast
 
     init(callbackPattern: String, onCallbackDetected: @escaping () -> Void) {
         self.callbackPattern = callbackPattern
@@ -105,7 +109,7 @@ final class SSONavigationDelegate: NSObject, WKNavigationDelegate {
             return
         }
 
-        if !callbackFired && matchesCallback(url) {
+        if !callbackFired && Date() >= callbackEarliestTime && matchesCallback(url) {
             callbackFired = true
             decisionHandler(.allow)
             onCallbackDetected()
@@ -704,6 +708,10 @@ final class SSOAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func navigateToAuth(url: URL) {
         navigationDelegate?.authorizeURL = url
+        // Grace period: ignore callback-URL matches for the first 5 seconds.
+        // The OIDC redirect chain can hit the callback URL in <3s if there's
+        // a cached IdP session. A real user auth (login + MFA) takes longer.
+        navigationDelegate?.callbackEarliestTime = Date().addingTimeInterval(5)
         webView?.load(URLRequest(url: url))
     }
 
