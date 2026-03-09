@@ -190,7 +190,15 @@ final class SSONavigationDelegate: NSObject, WKNavigationDelegate {
         } else {
             hostPort = host
         }
+        
+        // Exact match
         if hostPort == callbackPattern { return true }
+        
+        // Host-only match (callback pattern has no port but URL does, or vice versa)
+        let patternHost = callbackPattern.components(separatedBy: ":").first ?? callbackPattern
+        if host == patternHost { return true }
+        
+        // localhost / 127.0.0.1 equivalence
         let alt = callbackPattern.replacingOccurrences(of: "127.0.0.1", with: "localhost")
         if hostPort == alt { return true }
         let alt2 = callbackPattern.replacingOccurrences(of: "localhost", with: "127.0.0.1")
@@ -386,7 +394,7 @@ final class SSOAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var terminationReason: ExitCode = .userClosed
 
     private let launchConfig: LaunchConfig
-    private var callbackHost: String
+    private let callbackHost: String
 
     init(config: LaunchConfig) {
         self.launchConfig = config
@@ -674,13 +682,6 @@ final class SSOAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         notificationView?.removeFromSuperview()
         notificationView = nil
 
-        // Extract real callback host:port from the authorize URL's redirect_uri.
-        // At launch we only had a placeholder ("127.0.0.1") because the port
-        // isn't known until aws sso login starts its local HTTP server.
-        if let realCallback = Self.extractCallbackHost(from: url) {
-            callbackHost = realCallback
-        }
-
         // Setup webview and load
         setupWebView()
         setupTimeout(Timing.windowTimeout)
@@ -701,19 +702,6 @@ final class SSOAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     // MARK: - Auth navigation
 
-    /// Extract callback host:port from an authorize URL's redirect_uri parameter.
-    static func extractCallbackHost(from authorizeURL: URL) -> String? {
-        guard let components = URLComponents(url: authorizeURL, resolvingAgainstBaseURL: false),
-              let items = components.queryItems,
-              let redirectURI = items.first(where: { $0.name == "redirect_uri" })?.value,
-              let redirectURL = URL(string: redirectURI),
-              let host = redirectURL.host else { return nil }
-        if let port = redirectURL.port {
-            return "\(host):\(port)"
-        }
-        return host
-    }
-
     private func navigateToAuth(url: URL) {
         navigationDelegate?.authorizeURL = url
         webView?.load(URLRequest(url: url))
@@ -725,10 +713,6 @@ final class SSOAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         timeoutTimer?.invalidate()
         timeoutTimer = nil
         terminationReason = .success
-
-        // Stop in-flight navigation so the run loop isn't blocked loading
-        // the callback response page when the delayed terminate fires.
-        webView?.stopLoading()
 
         DispatchQueue.main.asyncAfter(deadline: .now() + Timing.postCallbackDelay) {
             NSApp.terminate(nil)
@@ -805,60 +789,6 @@ func clearCookies() {
     fflush(stdout)
 }
 
-// MARK: - App icon (programmatic — no .icns file needed)
-
-enum AppIcon {
-    /// Generate a 256x256 dock icon: rounded green square with a white
-    /// lightning-bolt key — "recharge your credentials".
-    static func generate() -> NSImage {
-        let size: CGFloat = 256
-        let image = NSImage(size: NSSize(width: size, height: size))
-        image.lockFocus()
-
-        let rect = NSRect(x: 0, y: 0, width: size, height: size)
-        let cornerRadius: CGFloat = size * 0.22
-        let path = NSBezierPath(roundedRect: rect, xRadius: cornerRadius, yRadius: cornerRadius)
-
-        let gradient = NSGradient(
-            starting: NSColor(red: 0.18, green: 0.72, blue: 0.35, alpha: 1.0),
-            ending:   NSColor(red: 0.10, green: 0.55, blue: 0.28, alpha: 1.0)
-        )
-        gradient?.draw(in: path, angle: -90)
-
-        NSColor(white: 0.0, alpha: 0.12).setStroke()
-        path.lineWidth = 2
-        path.stroke()
-
-        let bolt = NSBezierPath()
-        let cx: CGFloat = size * 0.50
-        let cy: CGFloat = size * 0.50
-        let s: CGFloat = size * 0.30
-        bolt.move(to: NSPoint(x: cx + s * 0.05,  y: cy + s * 1.0))
-        bolt.line(to: NSPoint(x: cx - s * 0.30,   y: cy + s * 0.10))
-        bolt.line(to: NSPoint(x: cx + s * 0.05,   y: cy + s * 0.15))
-        bolt.line(to: NSPoint(x: cx - s * 0.05,   y: cy - s * 1.0))
-        bolt.line(to: NSPoint(x: cx + s * 0.30,   y: cy - s * 0.10))
-        bolt.line(to: NSPoint(x: cx - s * 0.05,   y: cy - s * 0.15))
-        bolt.close()
-
-        NSColor.white.setFill()
-        bolt.fill()
-
-        let keyR: CGFloat = size * 0.06
-        let keyCenter = NSPoint(x: cx - s * 0.05, y: cy - s * 1.0 + keyR * 1.8)
-        let keyPath = NSBezierPath(ovalIn: NSRect(
-            x: keyCenter.x - keyR, y: keyCenter.y - keyR,
-            width: keyR * 2, height: keyR * 2
-        ))
-        NSColor.white.setStroke()
-        keyPath.lineWidth = size * 0.02
-        keyPath.stroke()
-
-        image.unlockFocus()
-        return image
-    }
-}
-
 // MARK: - Entry point
 
 if CommandLine.arguments.count >= 2 && CommandLine.arguments[1] == "--clear-cookies" {
@@ -875,7 +805,6 @@ Darwin.signal(SIGPIPE, SIG_IGN)
 
 let app = NSApplication.shared
 app.setActivationPolicy(.regular)
-app.applicationIconImage = AppIcon.generate()
 
 let delegate = SSOAppDelegate(config: config)
 app.delegate = delegate
