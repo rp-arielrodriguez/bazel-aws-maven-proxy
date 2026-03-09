@@ -386,7 +386,7 @@ final class SSOAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var terminationReason: ExitCode = .userClosed
 
     private let launchConfig: LaunchConfig
-    private let callbackHost: String
+    private var callbackHost: String
 
     init(config: LaunchConfig) {
         self.launchConfig = config
@@ -674,6 +674,13 @@ final class SSOAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         notificationView?.removeFromSuperview()
         notificationView = nil
 
+        // Extract real callback host:port from the authorize URL's redirect_uri.
+        // At launch we only had a placeholder ("127.0.0.1") because the port
+        // isn't known until aws sso login starts its local HTTP server.
+        if let realCallback = Self.extractCallbackHost(from: url) {
+            callbackHost = realCallback
+        }
+
         // Setup webview and load
         setupWebView()
         setupTimeout(Timing.windowTimeout)
@@ -693,6 +700,20 @@ final class SSOAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     // MARK: - Auth navigation
+
+    /// Extract callback host:port from an authorize URL's redirect_uri parameter.
+    /// e.g. "...&redirect_uri=http://127.0.0.1:54321/oauth/callback" → "127.0.0.1:54321"
+    static func extractCallbackHost(from authorizeURL: URL) -> String? {
+        guard let components = URLComponents(url: authorizeURL, resolvingAgainstBaseURL: false),
+              let items = components.queryItems,
+              let redirectURI = items.first(where: { $0.name == "redirect_uri" })?.value,
+              let redirectURL = URL(string: redirectURI),
+              let host = redirectURL.host else { return nil }
+        if let port = redirectURL.port {
+            return "\(host):\(port)"
+        }
+        return host
+    }
 
     private func navigateToAuth(url: URL) {
         navigationDelegate?.authorizeURL = url
