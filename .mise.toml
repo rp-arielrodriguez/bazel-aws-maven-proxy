@@ -68,7 +68,10 @@ fi
 
 [tasks.uninstall]
 description = "Uninstall complete system (containers + SSO watcher)"
-depends = ["containers:down", "sso-uninstall"]
+run = """
+mise run containers:down || true
+mise run sso-uninstall
+"""
 
 [tasks."containers:up"]
 description = "Start container services (rebuilds images if sources changed)"
