@@ -81,7 +81,7 @@ source scripts/container-engine.sh
 if [ -f "docker-compose.yaml" ] || [ -f "docker-compose.yml" ]; then
     $COMPOSE_CMD down
 else
-    echo "Compose file not found — containers already removed or not configured"
+    echo "Skipped"
 fi
 """
 
