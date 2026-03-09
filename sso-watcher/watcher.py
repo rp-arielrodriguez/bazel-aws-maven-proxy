@@ -866,6 +866,12 @@ def run_aws_sso_login(profile: str | None = None) -> int:
     finally:
         if webview_proc is not None and not let_webview_self_close:
             _kill_webview()
+        elif webview_proc is not None and let_webview_self_close:
+            # Give webview time to self-close (1.5s callback delay + margin)
+            try:
+                webview_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                _kill_webview()
 
 
 def check_for_updates() -> None:
@@ -982,6 +988,10 @@ class _WebviewHandle:
     def poll(self):
         """Check if webview is still running."""
         return self._open_proc.poll()
+
+    def wait(self, timeout=None):
+        """Wait for webview process to exit."""
+        return self._open_proc.wait(timeout=timeout)
 
     def cleanup(self):
         """Remove FIFOs."""
@@ -1236,6 +1246,12 @@ def _run_notify_login(profile: str) -> str:
             aws_proc.wait()
         if not let_webview_self_close and webview.poll() is None:
             _kill_webview()
+        elif let_webview_self_close and webview.poll() is None:
+            # Give webview time to self-close (1.5s callback delay + margin)
+            try:
+                webview.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                _kill_webview()
         try:
             webview.stdin.close()
         except Exception:

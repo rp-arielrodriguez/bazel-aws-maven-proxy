@@ -706,14 +706,22 @@ final class SSOAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         timeoutTimer = nil
         terminationReason = .success
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + Timing.postCallbackDelay) {
-            NSApp.terminate(nil)
+        // Stop any in-flight navigation that could block the run loop
+        webView?.stopLoading()
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + Timing.postCallbackDelay) { [weak self] in
+            // Close window first — applicationShouldTerminateAfterLastWindowClosed
+            // triggers termination even if NSApp.terminate gets stuck.
+            self?.window?.close()
         }
     }
 
     // MARK: - Signaling
 
     private func signal(_ message: String) {
+        // Watcher may close the read end of stdout before we emit.
+        // Ignore SIGPIPE so print() doesn't kill us mid-terminate.
+        Darwin.signal(SIGPIPE, SIG_IGN)
         print(message)
         fflush(stdout)
     }
