@@ -64,6 +64,8 @@ if command -v swiftc &>/dev/null; then
         mkdir -p "$WEBVIEW_APP_DIR/Contents/MacOS" "$WEBVIEW_APP_DIR/Contents/Resources"
         if swiftc "$WEBVIEW_SRC" -o "$WEBVIEW_BIN" -framework Cocoa -framework WebKit 2>&1; then
             cp "$WEBVIEW_PLIST" "$WEBVIEW_APP_DIR/Contents/Info.plist"
+            # Ad-hoc sign so macOS doesn't kill the binary for invalid signature
+            codesign --force --sign - "$WEBVIEW_APP_DIR" 2>/dev/null || true
             echo "✓ Built webview: $WEBVIEW_APP_DIR"
         else
             echo "⚠ Webview build failed (will fall back to system browser)"

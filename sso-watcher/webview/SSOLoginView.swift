@@ -702,7 +702,6 @@ final class SSOAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     // MARK: - Auth navigation
 
     /// Extract callback host:port from an authorize URL's redirect_uri parameter.
-    /// e.g. "...&redirect_uri=http://127.0.0.1:54321/oauth/callback" → "127.0.0.1:54321"
     static func extractCallbackHost(from authorizeURL: URL) -> String? {
         guard let components = URLComponents(url: authorizeURL, resolvingAgainstBaseURL: false),
               let items = components.queryItems,
@@ -727,22 +726,18 @@ final class SSOAppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         timeoutTimer = nil
         terminationReason = .success
 
-        // Stop any in-flight navigation that could block the run loop
+        // Stop in-flight navigation so the run loop isn't blocked loading
+        // the callback response page when the delayed terminate fires.
         webView?.stopLoading()
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + Timing.postCallbackDelay) { [weak self] in
-            // Close window first — applicationShouldTerminateAfterLastWindowClosed
-            // triggers termination even if NSApp.terminate gets stuck.
-            self?.window?.close()
+        DispatchQueue.main.asyncAfter(deadline: .now() + Timing.postCallbackDelay) {
+            NSApp.terminate(nil)
         }
     }
 
     // MARK: - Signaling
 
     private func signal(_ message: String) {
-        // Watcher may close the read end of stdout before we emit.
-        // Ignore SIGPIPE so print() doesn't kill us mid-terminate.
-        Darwin.signal(SIGPIPE, SIG_IGN)
         print(message)
         fflush(stdout)
     }
@@ -820,7 +815,6 @@ enum AppIcon {
         let image = NSImage(size: NSSize(width: size, height: size))
         image.lockFocus()
 
-        // Rounded-rect background (green gradient)
         let rect = NSRect(x: 0, y: 0, width: size, height: size)
         let cornerRadius: CGFloat = size * 0.22
         let path = NSBezierPath(roundedRect: rect, xRadius: cornerRadius, yRadius: cornerRadius)
@@ -831,30 +825,25 @@ enum AppIcon {
         )
         gradient?.draw(in: path, angle: -90)
 
-        // Subtle inner shadow / border
         NSColor(white: 0.0, alpha: 0.12).setStroke()
         path.lineWidth = 2
         path.stroke()
 
-        // Lightning bolt (white) — classic zigzag shape centered
         let bolt = NSBezierPath()
         let cx: CGFloat = size * 0.50
         let cy: CGFloat = size * 0.50
-
-        // Points relative to center, scaled to ~60% of icon
         let s: CGFloat = size * 0.30
-        bolt.move(to: NSPoint(x: cx + s * 0.05,  y: cy + s * 1.0))   // top
-        bolt.line(to: NSPoint(x: cx - s * 0.30,   y: cy + s * 0.10))  // mid-left
-        bolt.line(to: NSPoint(x: cx + s * 0.05,   y: cy + s * 0.15))  // mid-notch
-        bolt.line(to: NSPoint(x: cx - s * 0.05,   y: cy - s * 1.0))   // bottom
-        bolt.line(to: NSPoint(x: cx + s * 0.30,   y: cy - s * 0.10))  // mid-right
-        bolt.line(to: NSPoint(x: cx - s * 0.05,   y: cy - s * 0.15))  // mid-notch
+        bolt.move(to: NSPoint(x: cx + s * 0.05,  y: cy + s * 1.0))
+        bolt.line(to: NSPoint(x: cx - s * 0.30,   y: cy + s * 0.10))
+        bolt.line(to: NSPoint(x: cx + s * 0.05,   y: cy + s * 0.15))
+        bolt.line(to: NSPoint(x: cx - s * 0.05,   y: cy - s * 1.0))
+        bolt.line(to: NSPoint(x: cx + s * 0.30,   y: cy - s * 0.10))
+        bolt.line(to: NSPoint(x: cx - s * 0.05,   y: cy - s * 0.15))
         bolt.close()
 
         NSColor.white.setFill()
         bolt.fill()
 
-        // Small key circle at the bottom of the bolt
         let keyR: CGFloat = size * 0.06
         let keyCenter = NSPoint(x: cx - s * 0.05, y: cy - s * 1.0 + keyR * 1.8)
         let keyPath = NSBezierPath(ovalIn: NSRect(
