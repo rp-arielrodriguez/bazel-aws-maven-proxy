@@ -76,7 +76,14 @@ run = "source scripts/container-engine.sh && $COMPOSE_CMD up -d --build"
 
 [tasks."containers:down"]
 description = "Stop container services"
-run = "source scripts/container-engine.sh && $COMPOSE_CMD down"
+run = """
+source scripts/container-engine.sh
+if [ -f "docker-compose.yaml" ] || [ -f "docker-compose.yml" ]; then
+    $COMPOSE_CMD down
+else
+    echo "Compose file not found — containers already removed or not configured"
+fi
+"""
 
 [tasks."containers:logs"]
 description = "View container service logs"
