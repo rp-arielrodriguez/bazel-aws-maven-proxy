@@ -29,5 +29,15 @@ else
     echo "  Webview app bundle not found"
 fi
 
+# Remove bazel-proxy shim from PATH
+BIN_DIR="${BIN_DIR:-$HOME/.local/bin}"
+SHIM_PATH="$BIN_DIR/bazel-proxy"
+if [ -f "$SHIM_PATH" ]; then
+    rm -f "$SHIM_PATH"
+    echo "✓ Removed bazel-proxy command from $BIN_DIR"
+else
+    echo "  bazel-proxy command not found in $BIN_DIR"
+fi
+
 echo ""
 echo "SSO watcher uninstalled"
