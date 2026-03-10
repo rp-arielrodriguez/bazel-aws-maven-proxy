@@ -255,6 +255,7 @@ mise run sso-uninstall && mise run sso-install  # Reinstall
 - In `standalone` mode, watcher is idle — use `mise run sso-login` directly
 - Verify profile exists: `aws configure list-profiles`
 - Check `PATH` in plist includes AWS CLI location
+- **Verify correct AWS CLI**: `which aws` and `aws --version` — ensure brew's version is first in PATH, not an old system version
 
 ### Signal file stuck
 

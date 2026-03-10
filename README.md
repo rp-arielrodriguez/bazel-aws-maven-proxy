@@ -267,7 +267,17 @@ Environment variables in `.env`:
 
 ## Troubleshooting
 
-### Port conflicts
+### AWS CLI version mismatch
+
+If login fails or uses wrong AWS CLI version despite brew having the latest:
+
+```bash
+which aws                    # Should show: /opt/homebrew/bin/aws (or /usr/local/bin/aws)
+aws --version                # Check version is >= 2.9
+ls -la $(which aws)          # Verify it's from brew, not a stale system version
+```
+
+**Fix**: Ensure brew's path is first in your PATH. If you have multiple AWS CLI installations, remove old ones or reorder PATH so brew comes first.
 
 ```bash
 lsof -i :8888
