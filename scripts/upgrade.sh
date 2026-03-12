@@ -113,6 +113,18 @@ if echo "$CHANGED_FILES" | grep -q "scripts/upgrade.sh"; then
   exec bash "$0" "$@"
 fi
 
+# Re-check shim version after pull (in case install.sh changed)
+SHIM_FILE="$HOME/.local/bin/bazel-proxy"
+if [ -f "$SHIM_FILE" ]; then
+  SHIM_VERSION=$(grep "^# SHIM_VERSION:" "$SHIM_FILE" 2>/dev/null | cut -d: -f2 | tr -d ' ' || echo "")
+  CURRENT_VERSION=$(git rev-parse --short HEAD)
+  if [ "$SHIM_VERSION" != "$CURRENT_VERSION" ]; then
+    NEED_SHIM=true
+  fi
+else
+  NEED_SHIM=true
+fi
+
 # Categorize changes
 NEED_CONTAINERS=false
 NEED_NATIVE=false
