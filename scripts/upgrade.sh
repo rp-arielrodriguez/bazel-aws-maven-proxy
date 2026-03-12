@@ -72,6 +72,12 @@ if ! git pull --ff-only origin main; then
   exit 1
 fi
 
+# If upgrade.sh itself changed, re-execute the new version
+if echo "$CHANGED_FILES" | grep -q "scripts/upgrade.sh"; then
+  echo "Upgrade script updated — restarting with new version..."
+  exec bash "$0" "$@"
+fi
+
 # Categorize changes
 NEED_CONTAINERS=false
 NEED_NATIVE=false
