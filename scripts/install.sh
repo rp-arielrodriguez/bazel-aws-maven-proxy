@@ -85,9 +85,17 @@ case "$CMD" in
   logout)
     exec mise run sso-logout "$@" ;;
   logs)
+    exec mise run logs "$@" ;;
+  logs:follow)
+    exec mise run logs:follow "$@" ;;
+  logs:s3proxy)
+    exec mise run logs:s3proxy "$@" ;;
+  logs:monitor)
+    exec mise run logs:monitor "$@" ;;
+  logs:sso)
+    exec mise run logs:sso "$@" ;;
+  sso-logs)
     exec mise run sso-logs "$@" ;;
-  logs:follow|tail)
-    exec mise run sso-logs:follow "$@" ;;
   mode)
     exec mise run sso-mode "$@" ;;
   mode:*)
@@ -123,8 +131,11 @@ case "$CMD" in
     echo "SSO:"
     echo "  login              Trigger SSO login"
     echo "  logout             Invalidate credentials, trigger renewal"
-    echo "  logs               Show recent logs (last 50 lines)"
-    echo "  logs:follow        Stream logs"
+    echo "  logs               Show SSO logs (default) or all with --all"
+    echo "  logs:follow        Stream all logs (Ctrl+C to stop)"
+    echo "  logs:s3proxy       Show s3proxy logs only"
+    echo "  logs:monitor       Show sso-monitor logs only"
+    echo "  logs:sso           Show SSO watcher logs only"
     echo "  mode               Show current watcher mode"
     echo "  mode:notify|auto|silent|standalone"
     echo "                     Switch watcher mode"

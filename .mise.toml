@@ -158,6 +158,26 @@ tail -f "$LOG_FILE" "$ERROR_LOG" 2>/dev/null &
 wait $!
 """
 
+[tasks.logs]
+description = "Show SSO logs (default) or all logs with --all"
+run = "bash scripts/logs.sh {{args}}"
+
+[tasks."logs:follow"]
+description = "Stream all logs (mode-aware)"
+run = "bash scripts/logs.sh --follow"
+
+[tasks."logs:s3proxy"]
+description = "Show s3proxy logs only"
+run = "bash scripts/logs-s3proxy.sh {{arg(name=\"lines\", default=\"50\")}}"
+
+[tasks."logs:monitor"]
+description = "Show sso-monitor logs only"
+run = "bash scripts/logs-monitor.sh {{arg(name=\"lines\", default=\"50\")}}"
+
+[tasks."logs:sso"]
+description = "Show SSO watcher logs only"
+run = "bash scripts/sso-logs.sh {{arg(name=\"lines\", default=\"50\")}}"
+
 [tasks.sso-logout]
 description = "Logout from AWS SSO (invalidates credentials, triggers renewal)"
 run = """

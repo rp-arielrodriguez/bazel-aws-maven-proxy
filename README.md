@@ -210,8 +210,11 @@ mise run sso-stop             # Stop watcher (without uninstalling)
 mise run sso-status           # SSO watcher status: running, mode, credentials
 mise run sso-login            # Trigger login (dialog or direct per mode)
 mise run sso-logout           # Invalidate credentials, trigger renewal
-mise run sso-logs             # Show recent logs (last 50 lines)
-mise run sso-logs:follow      # Stream logs (Ctrl+C to stop)
+mise run logs                 # Show SSO logs (default) or all with --all
+mise run logs:follow          # Stream all logs (Ctrl+C to stop)
+mise run logs:s3proxy         # Show s3proxy logs only
+mise run logs:monitor         # Show sso-monitor logs only
+mise run logs:sso             # Show SSO watcher logs only
 mise run sso-mode             # Show current mode
 mise run sso-mode:notify      # Switch to notify (dialog)
 mise run sso-mode:auto        # Switch to auto (webview immediately)

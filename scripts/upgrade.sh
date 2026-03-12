@@ -37,6 +37,15 @@ if ! _fetch_with_timeout; then
   exit 1
 fi
 
+# Track what was running before upgrade (before any changes)
+WAS_RUNNING=false
+if [ -f "$HOME/.bazel-aws-maven-proxy/s3proxy.pid" ]; then
+  PID=$(cat "$HOME/.bazel-aws-maven-proxy/s3proxy.pid" 2>/dev/null)
+  [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null && WAS_RUNNING=true
+elif $COMPOSE_CMD ps 2>/dev/null | grep -q "bazel-s3-proxy.*Up"; then
+  WAS_RUNNING=true
+fi
+
 LOCAL=$(git rev-parse HEAD)
 REMOTE=$(git rev-parse origin/main)
 
@@ -100,6 +109,7 @@ fi
 # If upgrade.sh itself changed, re-execute the new version
 if echo "$CHANGED_FILES" | grep -q "scripts/upgrade.sh"; then
   echo "Upgrade script updated — restarting with new version..."
+  export BAZEL_PROXY_WAS_RUNNING=$WAS_RUNNING
   exec bash "$0" "$@"
 fi
 
@@ -216,6 +226,18 @@ fi
 if $NEED_SETUP; then
   echo ""
   echo "ℹ Setup scripts changed. If you experience issues, re-run: mise run setup"
+fi
+
+# 6. Restore running state if services were running before upgrade
+if [ "${BAZEL_PROXY_WAS_RUNNING:-false}" = "true" ] || [ "$WAS_RUNNING" = "true" ]; then
+  echo ""
+  echo "Restoring services..."
+  if [ "$CURRENT_MODE" = "native" ]; then
+    bash scripts/s3proxy-start.sh 2>&1
+    bash scripts/sso-monitor-start.sh 2>&1
+  else
+    $COMPOSE_CMD up -d 2>&1
+  fi
 fi
 
 # Summary
