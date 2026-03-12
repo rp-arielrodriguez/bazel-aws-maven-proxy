@@ -99,6 +99,18 @@ while IFS= read -r file; do
   esac
 done <<< "$CHANGED_FILES"
 
+# Check if shim is out of date (even if install.sh wasn't in changed files)
+SHIM_FILE="$HOME/.local/bin/bazel-proxy"
+if [ -f "$SHIM_FILE" ]; then
+  SHIM_VERSION=$(grep "^# SHIM_VERSION:" "$SHIM_FILE" 2>/dev/null | cut -d: -f2 | tr -d ' ' || echo "")
+  CURRENT_VERSION=$(git rev-parse --short HEAD)
+  if [ "$SHIM_VERSION" != "$CURRENT_VERSION" ]; then
+    NEED_SHIM=true
+  fi
+else
+  NEED_SHIM=true
+fi
+
 # Detect mode transition (container -> native) - always migrate if in container mode
 if [ "$CURRENT_MODE" = "container" ]; then
   echo ""
@@ -135,10 +147,10 @@ elif [ "$CURRENT_MODE" = "container" ] && $NEED_CONTAINERS; then
   fi
 fi
 
-# 2. Regenerate shim if install.sh changed
+# 2. Regenerate shim if install.sh changed or shim version is stale
 if $NEED_SHIM; then
   echo ""
-  echo "Install script changed — regenerating bazel-proxy command..."
+  echo "Command shim outdated — regenerating bazel-proxy..."
   if bash scripts/install.sh 2>&1; then
     ACTIONS_TAKEN="${ACTIONS_TAKEN:+$ACTIONS_TAKEN, }command shim updated"
   else
