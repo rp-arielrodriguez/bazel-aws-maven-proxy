@@ -23,6 +23,9 @@ mise run start
 # Stop everything
 mise run stop
 
+# Check system status
+mise run status
+
 # View container logs
 mise run containers:logs
 
@@ -42,7 +45,7 @@ mise run sso-install          # Install watcher (launchd agent)
 mise run sso-uninstall        # Uninstall
 mise run sso-start            # Start watcher (lightweight, no reinstall)
 mise run sso-stop             # Stop watcher (without uninstalling)
-mise run sso-status           # Dashboard: running, mode, credentials
+mise run sso-status           # SSO watcher status: running, mode, credentials
 mise run sso-login            # Trigger login (dialog or direct per mode)
 mise run sso-logout           # Invalidate credentials, trigger renewal
 mise run sso-logs             # Show recent logs (last 50 lines)

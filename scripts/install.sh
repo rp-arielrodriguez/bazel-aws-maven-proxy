@@ -130,6 +130,8 @@ case "$CMD" in
   start|stop|setup|uninstall|upgrade|config)
     exec mise run "$CMD" "$@" ;;
   status)
+    exec mise run status "$@" ;;
+  sso-status)
     exec mise run sso-status "$@" ;;
   login)
     exec mise run sso-login "$@" ;;
@@ -163,9 +165,9 @@ case "$CMD" in
     echo "bazel-proxy — manage Bazel AWS Maven S3 proxy"
     echo ""
     echo "System:"
-    echo "  start              Start everything (containers + watcher)"
+    echo "  start              Start everything (native mode: proxy + monitor + watcher)"
     echo "  stop               Stop everything"
-    echo "  status             Dashboard: running, mode, credentials"
+    echo "  status             System status: native/container mode, processes"
     echo "  setup              Re-run interactive setup"
     echo "  upgrade            Smart upgrade (pull + selective rebuild)"
     echo "  check-update       Check if updates available"
@@ -179,12 +181,13 @@ case "$CMD" in
     echo "  mode               Show current watcher mode"
     echo "  mode:notify|auto|silent|standalone"
     echo "                     Switch watcher mode"
+    echo "  sso-status         SSO watcher status: running, mode, credentials"
     echo "  restart            Restart watcher"
     echo "  install            Reinstall watcher (rebuild webview + daemon)"
     echo "  clean              Clear state/signals/cooldown"
     echo "  clean:cookies      Clear webview cookies"
     echo ""
-    echo "Containers:"
+    echo "Containers (alternative to native mode):"
     echo "  containers:up      Start containers"
     echo "  containers:down    Stop containers"
     echo "  containers:restart Restart containers"
@@ -221,7 +224,8 @@ echo ""
 info "Installation complete!"
 echo ""
 echo "  From anywhere:  bazel-proxy start"
-echo "  From repo dir:  mise run start"
-echo ""
-echo "  Dashboard:      bazel-proxy status"
-echo "  Help:           bazel-proxy help"
+  echo "  From repo dir:  mise run start"
+  echo ""
+  echo "  System status:  bazel-proxy status"
+  echo "  SSO status:     bazel-proxy sso-status"
+  echo "  Help:           bazel-proxy help"

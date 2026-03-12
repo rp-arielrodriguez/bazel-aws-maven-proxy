@@ -105,7 +105,7 @@ mise run sso-logs
 ```bash
 mise run sso-install          # Install watcher (launchd agent)
 mise run sso-uninstall        # Uninstall
-mise run sso-status           # Dashboard: running, mode, credentials
+mise run sso-status           # SSO watcher status: running, mode, credentials
 mise run sso-login            # Trigger login (dialog or direct per mode)
 mise run sso-logout           # Invalidate credentials, trigger renewal
 mise run sso-logs             # Show recent logs (last 50 lines)

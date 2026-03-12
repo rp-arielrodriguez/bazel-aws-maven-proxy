@@ -68,7 +68,8 @@ After install, operate from anywhere:
 ```bash
 bazel-proxy start       # Start everything
 bazel-proxy stop        # Stop everything
-bazel-proxy status      # Dashboard: running, mode, credentials
+bazel-proxy status      # System status: native/container mode, processes
+bazel-proxy sso-status  # SSO status: watcher, credentials
 bazel-proxy login       # Trigger SSO login
 bazel-proxy logout      # Invalidate credentials, trigger renewal
 bazel-proxy logs        # View watcher logs
@@ -170,6 +171,7 @@ maven_install(
 ```bash
 mise run start              # Start everything (native mode: proxy + monitor + watcher)
 mise run stop               # Stop everything
+mise run status             # System status: native/container mode, processes running
 ```
 
 ### Container Services
@@ -205,7 +207,7 @@ mise run sso-install          # Install watcher (launchd agent)
 mise run sso-uninstall        # Uninstall
 mise run sso-start            # Start watcher (lightweight, no reinstall)
 mise run sso-stop             # Stop watcher (without uninstalling)
-mise run sso-status           # Dashboard: running, mode, credentials
+mise run sso-status           # SSO watcher status: running, mode, credentials
 mise run sso-login            # Trigger login (dialog or direct per mode)
 mise run sso-logout           # Invalidate credentials, trigger renewal
 mise run sso-logs             # Show recent logs (last 50 lines)

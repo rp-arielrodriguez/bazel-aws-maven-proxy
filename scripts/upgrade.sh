@@ -6,6 +6,7 @@
 #   - s3proxy/sso-monitor sources → restart native processes (new default)
 #   - wrapper script changes → restart native processes
 #   - container mode users → migrate to native mode
+#   - install.sh changes → regenerate bazel-proxy shim
 #   - Swift webview changes → rebuild webview (via sso-install)
 #   - watcher.py/launchd changes → reinstall watcher daemon
 #   - .env.example changes → warn about new config vars
@@ -74,6 +75,7 @@ fi
 # Categorize changes
 NEED_CONTAINERS=false
 NEED_NATIVE=false
+NEED_SHIM=false
 NEED_WEBVIEW=false
 NEED_WATCHER=false
 NEED_SETUP=false
@@ -83,6 +85,7 @@ while IFS= read -r file; do
   case "$file" in
     s3proxy/*|sso-monitor/*|docker-compose.yaml) NEED_CONTAINERS=true ;;
     scripts/s3proxy-*.sh|scripts/sso-monitor-*.sh) NEED_NATIVE=true ;;
+    scripts/install.sh) NEED_SHIM=true ;;
     sso-watcher/webview/*) NEED_WEBVIEW=true ;;
     sso-watcher/watcher.py|launchd/*) NEED_WATCHER=true ;;
     scripts/setup.py|scripts/setup.sh) NEED_SETUP=true ;;
@@ -126,7 +129,18 @@ elif [ "$CURRENT_MODE" = "container" ] && $NEED_CONTAINERS; then
   fi
 fi
 
-# 2. Reinstall watcher if webview or watcher changed
+# 2. Regenerate shim if install.sh changed
+if $NEED_SHIM; then
+  echo ""
+  echo "Install script changed — regenerating bazel-proxy command..."
+  if bash scripts/install.sh 2>&1; then
+    ACTIONS_TAKEN="${ACTIONS_TAKEN:+$ACTIONS_TAKEN, }command shim updated"
+  else
+    echo "⚠ Shim regeneration failed — try: mise run setup"
+  fi
+fi
+
+# 3. Reinstall watcher if webview or watcher changed
 if $NEED_WEBVIEW || $NEED_WATCHER; then
   echo ""
   if $NEED_WEBVIEW; then
@@ -144,7 +158,7 @@ if $NEED_WEBVIEW || $NEED_WATCHER; then
   fi
 fi
 
-# 3. Check for new .env vars
+# 4. Check for new .env vars
 if $NEW_CONFIG; then
   echo ""
   echo "⚠ .env.example changed — check for new configuration variables:"
@@ -169,7 +183,7 @@ if $NEW_CONFIG; then
   fi
 fi
 
-# 4. Inform about setup changes
+# 5. Inform about setup changes
 if $NEED_SETUP; then
   echo ""
   echo "ℹ Setup scripts changed. If you experience issues, re-run: mise run setup"
