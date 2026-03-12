@@ -126,5 +126,5 @@ if [ -n "$ACTIONS" ]; then
 fi
 
 echo ""
-echo "Run: mise run upgrade"
+echo "Run: bazel-proxy upgrade"
 exit 0

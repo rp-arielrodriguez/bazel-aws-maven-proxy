@@ -112,7 +112,7 @@ if [ -f "$UPDATE_FILE" ]; then
     if [ -n "$ACTIONS" ]; then
         echo "                $ACTIONS"
     fi
-    echo "                Run: mise run upgrade"
+    echo "                Run: bazel-proxy upgrade"
 fi
 
 echo "────────────────────────────────────────────"

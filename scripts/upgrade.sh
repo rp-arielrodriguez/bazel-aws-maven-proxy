@@ -40,8 +40,33 @@ fi
 LOCAL=$(git rev-parse HEAD)
 REMOTE=$(git rev-parse origin/main)
 
+# Check if shim is out of date BEFORE checking git status
+# (so we regenerate even when already up to date)
+SHIM_FILE="$HOME/.local/bin/bazel-proxy"
+NEED_SHIM=false
+if [ -f "$SHIM_FILE" ]; then
+  SHIM_VERSION=$(grep "^# SHIM_VERSION:" "$SHIM_FILE" 2>/dev/null | cut -d: -f2 | tr -d ' ' || echo "")
+  CURRENT_VERSION=$(git rev-parse --short HEAD)
+  if [ "$SHIM_VERSION" != "$CURRENT_VERSION" ]; then
+    NEED_SHIM=true
+  fi
+else
+  NEED_SHIM=true
+fi
+
 if [ "$LOCAL" = "$REMOTE" ]; then
-  echo "✓ Already up to date"
+  # No git changes, but may need to regenerate shim
+  if $NEED_SHIM; then
+    echo ""
+    echo "Command shim outdated — regenerating bazel-proxy..."
+    if bash scripts/install.sh 2>&1; then
+      echo "✓ Command shim updated"
+    else
+      echo "⚠ Shim regeneration failed — try: mise run setup"
+    fi
+  else
+    echo "✓ Already up to date"
+  fi
   exit 0
 fi
 
@@ -81,7 +106,6 @@ fi
 # Categorize changes
 NEED_CONTAINERS=false
 NEED_NATIVE=false
-NEED_SHIM=false
 NEED_WEBVIEW=false
 NEED_WATCHER=false
 NEED_SETUP=false
@@ -91,25 +115,12 @@ while IFS= read -r file; do
   case "$file" in
     s3proxy/*|sso-monitor/*|docker-compose.yaml) NEED_CONTAINERS=true ;;
     scripts/s3proxy-*.sh|scripts/sso-monitor-*.sh) NEED_NATIVE=true ;;
-    scripts/install.sh) NEED_SHIM=true ;;
     sso-watcher/webview/*) NEED_WEBVIEW=true ;;
     sso-watcher/watcher.py|launchd/*) NEED_WATCHER=true ;;
     scripts/setup.py|scripts/setup.sh) NEED_SETUP=true ;;
     .env.example) NEW_CONFIG=true ;;
   esac
 done <<< "$CHANGED_FILES"
-
-# Check if shim is out of date (even if install.sh wasn't in changed files)
-SHIM_FILE="$HOME/.local/bin/bazel-proxy"
-if [ -f "$SHIM_FILE" ]; then
-  SHIM_VERSION=$(grep "^# SHIM_VERSION:" "$SHIM_FILE" 2>/dev/null | cut -d: -f2 | tr -d ' ' || echo "")
-  CURRENT_VERSION=$(git rev-parse --short HEAD)
-  if [ "$SHIM_VERSION" != "$CURRENT_VERSION" ]; then
-    NEED_SHIM=true
-  fi
-else
-  NEED_SHIM=true
-fi
 
 # Detect mode transition (container -> native) - always migrate if in container mode
 if [ "$CURRENT_MODE" = "container" ]; then
