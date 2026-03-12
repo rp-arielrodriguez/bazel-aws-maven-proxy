@@ -461,3 +461,80 @@ fi
 "$WEBVIEW_BIN" --clear-cookies
 echo "✓ Webview cookies cleared — next login will require full IdP auth"
 """
+
+[tasks.status]
+description = "Show system status (native processes, containers, watcher)"
+run = """
+set -euo pipefail
+
+echo "=== System Status ==="
+echo ""
+
+# Check native processes
+NATIVE_RUNNING=false
+if [ -f "$HOME/.bazel-aws-maven-proxy/s3proxy.pid" ]; then
+  S3_PID=$(cat "$HOME/.bazel-aws-maven-proxy/s3proxy.pid" 2>/dev/null || echo "")
+  if [ -n "$S3_PID" ] && kill -0 "$S3_PID" 2>/dev/null; then
+    echo "✓ s3proxy (native): running (PID: $S3_PID)"
+    NATIVE_RUNNING=true
+  else
+    echo "✗ s3proxy (native): not running (stale PID file)"
+    rm -f "$HOME/.bazel-aws-maven-proxy/s3proxy.pid"
+  fi
+else
+  echo "✗ s3proxy (native): not running"
+fi
+
+if [ -f "$HOME/.bazel-aws-maven-proxy/sso-monitor.pid" ]; then
+  MON_PID=$(cat "$HOME/.bazel-aws-maven-proxy/sso-monitor.pid" 2>/dev/null || echo "")
+  if [ -n "$MON_PID" ] && kill -0 "$MON_PID" 2>/dev/null; then
+    echo "✓ sso-monitor (native): running (PID: $MON_PID)"
+    NATIVE_RUNNING=true
+  else
+    echo "✗ sso-monitor (native): not running (stale PID file)"
+    rm -f "$HOME/.bazel-aws-maven-proxy/sso-monitor.pid"
+  fi
+else
+  echo "✗ sso-monitor (native): not running"
+fi
+
+# Check containers
+echo ""
+CONTAINER_RUNNING=false
+source scripts/container-engine.sh 2>/dev/null || true
+if $COMPOSE_CMD ps --filter "name=bazel-s3-proxy" --format "{% raw %}{{.Names}}{% endraw %}" 2>/dev/null | grep -q "bazel-s3-proxy"; then
+  echo "✓ s3proxy (container): running"
+  CONTAINER_RUNNING=true
+else
+  echo "✗ s3proxy (container): not running"
+fi
+
+if $COMPOSE_CMD ps --filter "name=bazel-sso-monitor" --format "{% raw %}{{.Names}}{% endraw %}" 2>/dev/null | grep -q "bazel-sso-monitor"; then
+  echo "✓ sso-monitor (container): running"
+  CONTAINER_RUNNING=true
+else
+  echo "✗ sso-monitor (container): not running"
+fi
+
+# Check watcher
+echo ""
+USER_ID=$(id -u)
+LABEL="com.bazel.sso-watcher"
+if launchctl print "gui/$USER_ID/$LABEL" &>/dev/null 2>&1; then
+  echo "✓ SSO watcher: running"
+else
+  echo "✗ SSO watcher: not running"
+fi
+
+# Summary
+echo ""
+if $NATIVE_RUNNING && ! $CONTAINER_RUNNING; then
+  echo "Mode: native (default)"
+elif $CONTAINER_RUNNING && ! $NATIVE_RUNNING; then
+  echo "Mode: container (legacy)"
+elif $NATIVE_RUNNING && $CONTAINER_RUNNING; then
+  echo "Mode: mixed (both native and container running - unusual)"
+else
+  echo "Mode: stopped (nothing running)"
+fi
+"""

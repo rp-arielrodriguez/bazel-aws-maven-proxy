@@ -90,8 +90,8 @@ while IFS= read -r file; do
   esac
 done <<< "$CHANGED_FILES"
 
-# Detect mode transition (container -> native)
-if [ "$CURRENT_MODE" = "container" ] && { $NEED_NATIVE || $NEED_CONTAINERS; }; then
+# Detect mode transition (container -> native) - always migrate if in container mode
+if [ "$CURRENT_MODE" = "container" ]; then
   echo ""
   echo "Note: Switching from container mode to native mode (new default)"
   echo "  Stopping containers before migrating..."
