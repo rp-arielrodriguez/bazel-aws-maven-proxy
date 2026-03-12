@@ -33,6 +33,18 @@ INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/share/bazel-proxy}"
 BIN_DIR="${BIN_DIR:-$HOME/.local/bin}"
 SHIM_NAME="bazel-proxy"
 
+# Colors (if terminal supports them)
+if [ -t 1 ]; then
+  RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; BOLD='\033[1m'; NC='\033[0m'
+else
+  RED=''; GREEN=''; YELLOW=''; BOLD=''; NC=''
+fi
+
+info()  { printf "${BOLD}%s${NC}\n" "$*"; }
+ok()    { printf "${GREEN}✓${NC} %s\n" "$*"; }
+warn()  { printf "${YELLOW}⚠${NC} %s\n" "$*"; }
+fail()  { printf "${RED}✗${NC} %s\n" "$*"; exit 1; }
+
 # Function to generate shim (used by both full install and --shim-only)
 generate_shim() {
   local REPO_DIR="$1"
@@ -177,18 +189,6 @@ if [ -z "${INSTALL_DIR+override}" ] && [ -d "$OLD_INSTALL/.git" ]; then
   mv "$OLD_INSTALL" "$INSTALL_DIR"
   echo "✓ Migrated"
 fi
-
-# Colors (if terminal supports them)
-if [ -t 1 ]; then
-  RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'; BOLD='\033[1m'; NC='\033[0m'
-else
-  RED=''; GREEN=''; YELLOW=''; BOLD=''; NC=''
-fi
-
-info()  { printf "${BOLD}%s${NC}\n" "$*"; }
-ok()    { printf "${GREEN}✓${NC} %s\n" "$*"; }
-warn()  { printf "${YELLOW}⚠${NC} %s\n" "$*"; }
-fail()  { printf "${RED}✗${NC} %s\n" "$*"; exit 1; }
 
 # ---- Prerequisites ----
 info "Checking prerequisites..."
