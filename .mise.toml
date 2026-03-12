@@ -142,42 +142,6 @@ run = "bash scripts/sso-status.sh"
 description = "Restart SSO watcher launchd agent"
 run = "bash scripts/sso-restart.sh"
 
-[tasks.sso-logs]
-description = "Show recent SSO watcher logs (default 50 lines)"
-run = "bash scripts/sso-logs.sh {{arg(name=\"lines\", default=\"50\")}}"
-
-[tasks."sso-logs:follow"]
-description = "Stream SSO watcher logs (Ctrl+C to stop)"
-run = """
-set -euo pipefail
-LOG_FILE="$HOME/Library/Logs/sso-watcher.log"
-ERROR_LOG="$HOME/Library/Logs/sso-watcher.error.log"
-echo "Streaming SSO watcher logs (Ctrl+C to exit)..."
-trap 'exit 0' INT TERM
-tail -f "$LOG_FILE" "$ERROR_LOG" 2>/dev/null &
-wait $!
-"""
-
-[tasks.logs]
-description = "Show SSO logs (default) or all logs with --all"
-run = "bash scripts/logs.sh {{args}}"
-
-[tasks."logs:follow"]
-description = "Stream all logs (mode-aware)"
-run = "bash scripts/logs.sh --follow"
-
-[tasks."logs:s3proxy"]
-description = "Show s3proxy logs only"
-run = "bash scripts/logs-s3proxy.sh {{arg(name=\"lines\", default=\"50\")}}"
-
-[tasks."logs:monitor"]
-description = "Show sso-monitor logs only"
-run = "bash scripts/logs-monitor.sh {{arg(name=\"lines\", default=\"50\")}}"
-
-[tasks."logs:sso"]
-description = "Show SSO watcher logs only"
-run = "bash scripts/sso-logs.sh {{arg(name=\"lines\", default=\"50\")}}"
-
 [tasks.sso-logout]
 description = "Logout from AWS SSO (invalidates credentials, triggers renewal)"
 run = """
@@ -483,78 +447,94 @@ echo "✓ Webview cookies cleared — next login will require full IdP auth"
 """
 
 [tasks.status]
-description = "Show system status (native processes, containers, watcher)"
+description = "Show system status (mode-aware)"
 run = """
 set -euo pipefail
 
-echo "=== System Status ==="
-echo ""
+source scripts/container-engine.sh 2>/dev/null || true
 
-# Check native processes
+# Detect mode first
+MODE="stopped"
 NATIVE_RUNNING=false
+CONTAINER_RUNNING=false
+
 if [ -f "$HOME/.bazel-aws-maven-proxy/s3proxy.pid" ]; then
   S3_PID=$(cat "$HOME/.bazel-aws-maven-proxy/s3proxy.pid" 2>/dev/null || echo "")
   if [ -n "$S3_PID" ] && kill -0 "$S3_PID" 2>/dev/null; then
-    echo "✓ s3proxy (native): running (PID: $S3_PID)"
     NATIVE_RUNNING=true
+    MODE="native"
+  fi
+fi
+
+if ! $NATIVE_RUNNING; then
+  if $COMPOSE_CMD ps --filter "name=bazel-s3-proxy" --format "{% raw %}{{.Names}}{% endraw %}" 2>/dev/null | grep -q "bazel-s3-proxy"; then
+    CONTAINER_RUNNING=true
+    MODE="container"
+  fi
+fi
+
+# Show mode at top
+echo "Mode: $MODE"
+if [ "$MODE" = "native" ]; then
+  echo "  (default)"
+elif [ "$MODE" = "container" ]; then
+  echo "  (legacy)"
+fi
+echo ""
+
+# Show services (mode-aware)
+echo "Services:"
+if [ "$MODE" = "native" ]; then
+  # Show native processes only
+  if [ -f "$HOME/.bazel-aws-maven-proxy/s3proxy.pid" ]; then
+    S3_PID=$(cat "$HOME/.bazel-aws-maven-proxy/s3proxy.pid" 2>/dev/null || echo "")
+    if [ -n "$S3_PID" ] && kill -0 "$S3_PID" 2>/dev/null; then
+      echo "  ✓ s3proxy (PID: $S3_PID)"
+    else
+      echo "  ✗ s3proxy (stale PID file)"
+      rm -f "$HOME/.bazel-aws-maven-proxy/s3proxy.pid"
+    fi
   else
-    echo "✗ s3proxy (native): not running (stale PID file)"
-    rm -f "$HOME/.bazel-aws-maven-proxy/s3proxy.pid"
+    echo "  ✗ s3proxy (not running)"
+  fi
+  
+  if [ -f "$HOME/.bazel-aws-maven-proxy/sso-monitor.pid" ]; then
+    MON_PID=$(cat "$HOME/.bazel-aws-maven-proxy/sso-monitor.pid" 2>/dev/null || echo "")
+    if [ -n "$MON_PID" ] && kill -0 "$MON_PID" 2>/dev/null; then
+      echo "  ✓ sso-monitor (PID: $MON_PID)"
+    else
+      echo "  ✗ sso-monitor (stale PID file)"
+      rm -f "$HOME/.bazel-aws-maven-proxy/sso-monitor.pid"
+    fi
+  else
+    echo "  ✗ sso-monitor (not running)"
+  fi
+elif [ "$MODE" = "container" ]; then
+  # Show containers only
+  if $COMPOSE_CMD ps --filter "name=bazel-s3-proxy" --format "{% raw %}{{.Names}}{% endraw %}" 2>/dev/null | grep -q "bazel-s3-proxy"; then
+    echo "  ✓ s3proxy"
+  else
+    echo "  ✗ s3proxy (not running)"
+  fi
+  
+  if $COMPOSE_CMD ps --filter "name=bazel-sso-monitor" --format "{% raw %}{{.Names}}{% endraw %}" 2>/dev/null | grep -q "bazel-sso-monitor"; then
+    echo "  ✓ sso-monitor"
+  else
+    echo "  ✗ sso-monitor (not running)"
   fi
 else
-  echo "✗ s3proxy (native): not running"
+  # Stopped
+  echo "  ✗ No services running"
 fi
 
-if [ -f "$HOME/.bazel-aws-maven-proxy/sso-monitor.pid" ]; then
-  MON_PID=$(cat "$HOME/.bazel-aws-maven-proxy/sso-monitor.pid" 2>/dev/null || echo "")
-  if [ -n "$MON_PID" ] && kill -0 "$MON_PID" 2>/dev/null; then
-    echo "✓ sso-monitor (native): running (PID: $MON_PID)"
-    NATIVE_RUNNING=true
-  else
-    echo "✗ sso-monitor (native): not running (stale PID file)"
-    rm -f "$HOME/.bazel-aws-maven-proxy/sso-monitor.pid"
-  fi
-else
-  echo "✗ sso-monitor (native): not running"
-fi
-
-# Check containers
+# Always show SSO watcher
 echo ""
-CONTAINER_RUNNING=false
-source scripts/container-engine.sh 2>/dev/null || true
-if $COMPOSE_CMD ps --filter "name=bazel-s3-proxy" --format "{% raw %}{{.Names}}{% endraw %}" 2>/dev/null | grep -q "bazel-s3-proxy"; then
-  echo "✓ s3proxy (container): running"
-  CONTAINER_RUNNING=true
-else
-  echo "✗ s3proxy (container): not running"
-fi
-
-if $COMPOSE_CMD ps --filter "name=bazel-sso-monitor" --format "{% raw %}{{.Names}}{% endraw %}" 2>/dev/null | grep -q "bazel-sso-monitor"; then
-  echo "✓ sso-monitor (container): running"
-  CONTAINER_RUNNING=true
-else
-  echo "✗ sso-monitor (container): not running"
-fi
-
-# Check watcher
-echo ""
+echo "SSO Watcher:"
 USER_ID=$(id -u)
 LABEL="com.bazel.sso-watcher"
 if launchctl print "gui/$USER_ID/$LABEL" &>/dev/null 2>&1; then
-  echo "✓ SSO watcher: running"
+  echo "  ✓ Running"
 else
-  echo "✗ SSO watcher: not running"
-fi
-
-# Summary
-echo ""
-if $NATIVE_RUNNING && ! $CONTAINER_RUNNING; then
-  echo "Mode: native (default)"
-elif $CONTAINER_RUNNING && ! $NATIVE_RUNNING; then
-  echo "Mode: container (legacy)"
-elif $NATIVE_RUNNING && $CONTAINER_RUNNING; then
-  echo "Mode: mixed (both native and container running - unusual)"
-else
-  echo "Mode: stopped (nothing running)"
+  echo "  ✗ Not running"
 fi
 """

@@ -30,7 +30,7 @@ mise run status
 mise run containers:logs
 
 # View SSO watcher logs
-mise run sso-logs
+mise run logs
 
 # Or use compose directly for container mode (podman preferred, docker also supported):
 podman compose up -d      # Start services
@@ -48,11 +48,8 @@ mise run sso-stop             # Stop watcher (without uninstalling)
 mise run sso-status           # SSO watcher status: running, mode, credentials
 mise run sso-login            # Trigger login (dialog or direct per mode)
 mise run sso-logout           # Invalidate credentials, trigger renewal
-mise run logs                 # Show SSO logs (default) or all with --all
-mise run logs:follow          # Stream all logs (Ctrl+C to stop)
-mise run logs:s3proxy         # Show s3proxy logs only
-mise run logs:monitor         # Show sso-monitor logs only
-mise run logs:sso             # Show SSO watcher logs only
+mise run logs [OPTIONS]       # Show logs (default: SSO watcher)
+  # Options: --all, --s3proxy, --monitor, --sso, --follow, --tail N
 mise run sso-mode             # Show current mode
 mise run sso-mode:notify      # Switch to notify (dialog)
 mise run sso-mode:auto        # Switch to auto (webview immediately)
@@ -238,7 +235,7 @@ maven_install(
 
 - **Port conflicts**: Check if `PROXY_PORT` available
 - **AWS credentials**: Verify with `aws s3 ls s3://bucket-name/`
-- **Watcher not triggering**: Check logs with `mise run sso-logs`
+- **Watcher not triggering**: Check logs with `mise run logs`
 - **Profile not found**: Update `AWS_PROFILE` in `.env` and run `mise run sso-install`
 
 ## Testing

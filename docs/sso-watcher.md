@@ -97,7 +97,7 @@ mise run sso-install
 mise run sso-status
 
 # View logs
-mise run sso-logs
+mise run logs
 ```
 
 ## Commands
@@ -108,11 +108,8 @@ mise run sso-uninstall        # Uninstall
 mise run sso-status           # SSO watcher status: running, mode, credentials
 mise run sso-login            # Trigger login (dialog or direct per mode)
 mise run sso-logout           # Invalidate credentials, trigger renewal
-mise run logs                 # Show SSO logs (default) or all with --all
-mise run logs:follow          # Stream all logs (Ctrl+C to stop)
-mise run logs:s3proxy         # Show s3proxy logs only
-mise run logs:monitor         # Show sso-monitor logs only
-mise run logs:sso             # Show SSO watcher logs only
+mise run logs [OPTIONS]       # Show logs (default: SSO watcher)
+  # Options: --all, --s3proxy, --monitor, --sso, --follow, --tail N
 mise run sso-mode             # Show current mode
 mise run sso-mode:notify      # Switch to notify (dialog)
 mise run sso-mode:auto        # Switch to auto (webview immediately)
@@ -247,7 +244,7 @@ Shared directory: `~/.aws/sso-renewer/`
 
 ```bash
 mise run sso-status         # Check installed/running/mode
-mise run sso-logs           # View recent logs
+mise run logs               # View recent logs
 mise run sso-uninstall && mise run sso-install  # Reinstall
 ```
 
