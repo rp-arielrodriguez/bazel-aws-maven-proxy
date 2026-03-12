@@ -3,7 +3,9 @@
 #
 # Detects which components were affected by the update and only
 # rebuilds/restarts what's needed:
-#   - s3proxy/sso-monitor/compose changes → rebuild containers
+#   - s3proxy/sso-monitor sources → restart native processes (new default)
+#   - wrapper script changes → restart native processes
+#   - container mode users → migrate to native mode
 #   - Swift webview changes → rebuild webview (via sso-install)
 #   - watcher.py/launchd changes → reinstall watcher daemon
 #   - .env.example changes → warn about new config vars
@@ -43,9 +45,24 @@ if [ "$LOCAL" = "$REMOTE" ]; then
 fi
 
 BEHIND=$(git rev-list --count HEAD..origin/main)
-echo "Pulling $BEHIND commit(s)..."
+# Detect current mode
+_detect_mode() {
+  # Check for native mode (PID files)
+  if [ -f "$HOME/.bazel-aws-maven-proxy/s3proxy.pid" ] || [ -f "$HOME/.bazel-aws-maven-proxy/sso-monitor.pid" ]; then
+    echo "native"
+    return
+  fi
+  # Check for container mode
+  if $COMPOSE_CMD ps --filter "name=bazel-s3-proxy" --format "{{.Names}}" 2>/dev/null | grep -q "bazel-s3-proxy"; then
+    echo "container"
+    return
+  fi
+  # Default to native for new users
+  echo "native"
+}
 
-# Snapshot changed files BEFORE pull
+CURRENT_MODE=$(_detect_mode)
+NEED_NATIVE_RESTART=false
 CHANGED_FILES=$(git diff --name-only HEAD..origin/main)
 
 # Pull
@@ -56,6 +73,7 @@ fi
 
 # Categorize changes
 NEED_CONTAINERS=false
+NEED_NATIVE=false
 NEED_WEBVIEW=false
 NEED_WATCHER=false
 NEED_SETUP=false
@@ -64,6 +82,7 @@ NEW_CONFIG=false
 while IFS= read -r file; do
   case "$file" in
     s3proxy/*|sso-monitor/*|docker-compose.yaml) NEED_CONTAINERS=true ;;
+    scripts/s3proxy-*.sh|scripts/sso-monitor-*.sh) NEED_NATIVE=true ;;
     sso-watcher/webview/*) NEED_WEBVIEW=true ;;
     sso-watcher/watcher.py|launchd/*) NEED_WATCHER=true ;;
     scripts/setup.py|scripts/setup.sh) NEED_SETUP=true ;;
@@ -71,10 +90,33 @@ while IFS= read -r file; do
   esac
 done <<< "$CHANGED_FILES"
 
+# Detect mode transition (container -> native)
+if [ "$CURRENT_MODE" = "container" ] && { $NEED_NATIVE || $NEED_CONTAINERS; }; then
+  echo ""
+  echo "Note: Switching from container mode to native mode (new default)"
+  echo "  Stopping containers before migrating..."
+  $COMPOSE_CMD down 2>/dev/null || true
+  CURRENT_MODE="native"
+  NEED_NATIVE_RESTART=true
+fi
+
 ACTIONS_TAKEN=""
 
-# 1. Rebuild containers if needed
-if $NEED_CONTAINERS; then
+# 1. Restart native processes if needed (new default)
+if [ "$CURRENT_MODE" = "native" ] && { $NEED_NATIVE || $NEED_CONTAINERS || $NEED_NATIVE_RESTART; }; then
+  echo ""
+  echo "Native service sources changed — restarting..."
+  # Stop any running native processes first
+  bash scripts/s3proxy-stop.sh 2>/dev/null || true
+  bash scripts/sso-monitor-stop.sh 2>/dev/null || true
+  sleep 1
+  # Start native processes
+  if bash scripts/s3proxy-start.sh 2>&1 && bash scripts/sso-monitor-start.sh 2>&1; then
+    ACTIONS_TAKEN="${ACTIONS_TAKEN:+$ACTIONS_TAKEN, }native services restarted"
+  else
+    echo "⚠ Native service restart failed — try: mise run start"
+  fi
+elif [ "$CURRENT_MODE" = "container" ] && $NEED_CONTAINERS; then
   echo ""
   echo "Container sources changed — rebuilding..."
   if $COMPOSE_CMD up -d --build 2>&1; then
@@ -100,8 +142,6 @@ if $NEED_WEBVIEW || $NEED_WATCHER; then
   else
     echo "⚠ Watcher reinstall failed — try: mise run sso-install"
   fi
-elif $NEED_CONTAINERS; then
-  : # containers already handled above, watcher doesn't need restart
 fi
 
 # 3. Check for new .env vars

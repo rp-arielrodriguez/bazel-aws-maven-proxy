@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-This project provides a transparent proxy layer between Bazel builds and S3-hosted Maven repositories with automated AWS SSO authentication support via container-based monitoring and host-side watcher integration. Supports Podman (preferred) and Docker.
+This project provides a transparent proxy layer between Bazel builds and S3-hosted Maven repositories with automated AWS SSO authentication support. Native mode runs Python processes directly (default); container mode available as alternative. Supports Podman and Docker.
 
 ## Key Commands
 
@@ -17,7 +17,7 @@ bazel-proxy start|stop|status|login|logs|upgrade|help  # Operate from anywhere
 ### Starting and Managing Services
 
 ```bash
-# Start everything (containers + SSO watcher)
+# Start everything (native mode: proxy + monitor + SSO watcher)
 mise run start
 
 # Stop everything
@@ -29,7 +29,7 @@ mise run containers:logs
 # View SSO watcher logs
 mise run sso-logs
 
-# Or use compose directly (podman preferred, docker also supported):
+# Or use compose directly for container mode (podman preferred, docker also supported):
 podman compose up -d      # Start services
 podman compose logs -f    # View logs
 podman compose down       # Stop services
@@ -99,11 +99,11 @@ Environment variables in `.env` (copy from `.env.example`):
 - **Cache**: `/data` (container volume)
 
 ### SSO Monitor Service (`sso-monitor/`)
-- **Language**: Python (container)
+- **Language**: Python (runs in native mode or container)
 - **Main file**: `sso-monitor/monitor.py`
 - **Purpose**: Continuously monitor credential validity
 - **Key functionality**:
-  - Runs in container alongside s3proxy
+  - Runs as native process (default) or in container alongside s3proxy
   - Checks credentials every 60 seconds (configurable)
   - Writes signal file to shared volume when expired
   - Uses `boto3 sts.get_caller_identity()` for validation
@@ -186,10 +186,10 @@ See [docs/state-machine.md](docs/state-machine.md) for formal state diagrams (Me
                ▼ writes new token
       ~/.aws/sso/cache/*.json
                │
-               ▼ both containers detect
+               ▼ both services detect (native or containers)
 ┌──────────────┴──────────────────────┐
 │  S3 Proxy + Monitor reload creds    │
-│  - No container restart needed       │
+│  - No service restart needed          │
 └─────────────────────────────────────┘
 ```
 
@@ -204,7 +204,7 @@ See [docs/state-machine.md](docs/state-machine.md) for formal state diagrams (Me
 - Handles file serving and directory listings
 
 ### SSO Monitor (`sso-monitor/monitor.py`)
-- Container daemon that checks credentials periodically
+- Native process (default) or container daemon that checks credentials periodically
 - Primary check: `boto3.client('sts').get_caller_identity()`
 - Writes signal files when credentials expire
 - State-based signaling (only on transitions)

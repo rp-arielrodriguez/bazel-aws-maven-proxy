@@ -293,16 +293,23 @@ flowchart TB
         l8 -->|no/placeholder| l10[Skip]
     end
 
-    login --> containers
+    login --> services
 
-    subgraph containers["Phase 8: Start Containers"]
+    subgraph services["Phase 8: Start Services (Native Mode)"]
         direction TB
-        c1{Start now?}
-        c1 -->|yes| c2[mise run containers:up]
-        c1 -->|no| c3[Skip]
+        s1{Start now?}
+        s1 -->|yes| s2[mise run start]
+        s1 -->|no| s3[Skip]
     end
 
-    containers --> summary([Setup complete!])
+    services --> containers_opt["Optional: Container Mode"]
+
+    subgraph containers_opt["Alternative: Start Containers"]
+        direction TB
+        c1{mise run containers:up}
+    end
+
+    containers_opt --> summary([Setup complete!])
 ```
 
 ### Setup Error Handling

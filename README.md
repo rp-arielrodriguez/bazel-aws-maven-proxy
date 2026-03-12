@@ -168,7 +168,7 @@ maven_install(
 ### System
 
 ```bash
-mise run start              # Start everything (containers + watcher)
+mise run start              # Start everything (native mode: proxy + monitor + watcher)
 mise run stop               # Stop everything
 ```
 

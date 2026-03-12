@@ -17,12 +17,28 @@ raw = true
 run = "bash scripts/setup.sh"
 
 [tasks.start]
-description = "Start complete system (containers + SSO watcher)"
-depends = ["containers:up", "sso-start"]
+description = "Start complete system (native mode: proxy + monitor + watcher)"
+depends = ["proxy:start", "monitor:start", "sso-start"]
 
 [tasks.stop]
-description = "Stop services (containers + watcher agent)"
-depends = ["containers:down", "sso-stop"]
+description = "Stop services (native mode)"
+depends = ["proxy:stop", "monitor:stop", "sso-stop"]
+
+[tasks."proxy:start"]
+description = "Start S3 proxy (native Python process)"
+run = "bash scripts/s3proxy-start.sh"
+
+[tasks."proxy:stop"]
+description = "Stop S3 proxy (native process)"
+run = "bash scripts/s3proxy-stop.sh"
+
+[tasks."monitor:start"]
+description = "Start SSO monitor (native Python process)"
+run = "bash scripts/sso-monitor-start.sh"
+
+[tasks."monitor:stop"]
+description = "Stop SSO monitor (native process)"
+run = "bash scripts/sso-monitor-stop.sh"
 
 [tasks."sso-start"]
 description = "Start SSO watcher (bootstrap if installed, full install if not)"
@@ -67,14 +83,19 @@ fi
 """
 
 [tasks.uninstall]
-description = "Uninstall complete system (containers + SSO watcher)"
+description = "Uninstall complete system (native services + SSO watcher)"
 run = """
-# Stop containers first (if compose file exists)
+# Stop native processes first
+bash scripts/s3proxy-stop.sh 2>/dev/null || true
+bash scripts/sso-monitor-stop.sh 2>/dev/null || true
+
+# Stop containers if they exist (legacy migration)
 if [ -f "docker-compose.yaml" ] || [ -f "docker-compose.yml" ]; then
-    source scripts/container-engine.sh
-    $COMPOSE_CMD down
+    source scripts/container-engine.sh 2>/dev/null || true
+    $COMPOSE_CMD down 2>/dev/null || true
 fi
-# Then uninstall everything else
+
+# Then uninstall SSO watcher
 bash scripts/sso-uninstall.sh
 """
 

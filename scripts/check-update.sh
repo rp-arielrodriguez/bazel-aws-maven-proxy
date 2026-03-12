@@ -64,6 +64,7 @@ CHANGED_FILES=$(git diff --name-only HEAD..origin/main)
 
 # Categorize changes
 CONTAINERS=false
+NATIVE=false
 WEBVIEW=false
 WATCHER=false
 SETUP=false
@@ -73,6 +74,7 @@ DOCS=false
 while IFS= read -r file; do
   case "$file" in
     s3proxy/*|sso-monitor/*|docker-compose.yaml) CONTAINERS=true ;;
+    scripts/s3proxy-*.sh|scripts/sso-monitor-*.sh) NATIVE=true ;;
     sso-watcher/webview/*) WEBVIEW=true ;;
     sso-watcher/watcher.py|launchd/*) WATCHER=true ;;
     scripts/setup.py|scripts/setup.sh) SETUP=true ;;
@@ -83,6 +85,7 @@ done <<< "$CHANGED_FILES"
 
 # Build actions list
 ACTIONS=""
+if $NATIVE; then ACTIONS="${ACTIONS:+$ACTIONS, }restart native services"; fi
 if $CONTAINERS; then ACTIONS="${ACTIONS:+$ACTIONS, }rebuild containers"; fi
 if $WEBVIEW; then ACTIONS="${ACTIONS:+$ACTIONS, }rebuild webview"; fi
 if $WATCHER; then ACTIONS="${ACTIONS:+$ACTIONS, }restart watcher"; fi
