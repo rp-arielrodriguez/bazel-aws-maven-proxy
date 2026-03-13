@@ -88,6 +88,7 @@ Environment variables in `.env` (copy from `.env.example`):
 ### S3 Proxy Service (`s3proxy/`)
 - **Language**: Python (Flask)
 - **Main file**: `s3proxy/app.py`
+- **Server**: Gunicorn (production WSGI)
 - **Purpose**: HTTP server for Bazel Maven artifacts
 - **Key functionality**:
   - Serves artifacts from local cache
@@ -96,7 +97,7 @@ Environment variables in `.env` (copy from `.env.example`):
   - Refreshes AWS credentials periodically
   - Health check at `/healthz`
 - **Port**: Configurable via `PROXY_PORT`
-- **Cache**: `/data` (container volume)
+- **Cache**: `~/.bazel-aws-maven-proxy/cache` (native) or `/data` (container)
 
 ### SSO Monitor Service (`sso-monitor/`)
 - **Language**: Python (runs in native mode or container)

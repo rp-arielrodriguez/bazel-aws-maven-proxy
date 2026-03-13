@@ -37,7 +37,24 @@ fi
 # Start s3proxy
 echo "Starting s3proxy on port $PROXY_PORT..."
 cd "$REPO_ROOT/s3proxy"
-python3 app.py > "$LOG_DIR/s3proxy.log" 2>&1 &
+
+# Use Gunicorn if available (production WSGI), fall back to Flask dev server
+if command -v gunicorn &>/dev/null; then
+  gunicorn \
+    --bind "0.0.0.0:$PROXY_PORT" \
+    --workers 2 \
+    --threads 4 \
+    --timeout 120 \
+    --access-logfile - \
+    --error-logfile - \
+    --capture-output \
+    app:app > "$LOG_DIR/s3proxy.log" 2>&1 &
+else
+  echo "⚠ Gunicorn not found, using Flask dev server (not recommended for production)"
+  echo "  Install with: pip install gunicorn"
+  python3 app.py > "$LOG_DIR/s3proxy.log" 2>&1 &
+fi
+
 PID=$!
 echo $PID > "$PIDFILE"
 
