@@ -1587,7 +1587,7 @@ class TestPrintSummary:
         ctx = MockSetupContext()
         print_summary(ctx, EnvConfig())
         out = output_text(ctx)
-        assert "mise run containers:logs" in out
+        assert "mise run logs" in out
         assert "mise run sso-status" in out
         assert "healthz" in out
 

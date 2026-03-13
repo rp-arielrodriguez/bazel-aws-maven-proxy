@@ -137,4 +137,4 @@ fi
 
 echo ""
 echo "SSO watcher is now running!"
-echo "View logs with: mise run sso-logs"
+echo "View logs with: mise run logs"
