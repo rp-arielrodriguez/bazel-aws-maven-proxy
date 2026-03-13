@@ -114,10 +114,6 @@ else
 fi
 """
 
-[tasks."containers:logs"]
-description = "View container service logs"
-run = "bash scripts/docker-logs.sh"
-
 [tasks."containers:restart"]
 description = "Restart container services (rebuilds images if sources changed)"
 run = "source scripts/container-engine.sh && $COMPOSE_CMD up -d --build --force-recreate"

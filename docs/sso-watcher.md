@@ -262,7 +262,7 @@ mise run sso-uninstall && mise run sso-install  # Reinstall
 ```bash
 mise run sso-clean                    # Clear state, signals, and cooldown
 mise run sso-clean:cookies            # Clear webview cookies if login keeps failing
-mise run containers:logs              # Check monitor is running
+mise run logs --all                   # Check monitor is running
 ```
 
 ### Multiple login popups

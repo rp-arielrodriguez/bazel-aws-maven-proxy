@@ -26,10 +26,7 @@ mise run stop
 # Check system status
 mise run status
 
-# View container logs
-mise run containers:logs
-
-# View SSO watcher logs
+# View logs (mode-aware: native or container)
 mise run logs
 
 # Or use compose directly for container mode (podman preferred, docker also supported):

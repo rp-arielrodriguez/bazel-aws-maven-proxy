@@ -180,7 +180,6 @@ mise run status             # System status: native/container mode, processes ru
 mise run containers:up      # Start containers
 mise run containers:down    # Stop containers
 mise run containers:restart # Restart containers
-mise run containers:logs    # View container logs
 ```
 
 Supports Podman (preferred) and Docker. Auto-detected, or set `CONTAINER_ENGINE` in `.env`.

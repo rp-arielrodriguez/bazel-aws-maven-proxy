@@ -138,7 +138,6 @@ case "$CMD" in
     echo "  containers:up      Start containers"
     echo "  containers:down    Stop containers"
     echo "  containers:restart Restart containers"
-    echo "  containers:logs    View container logs"
     echo ""
     echo "Config:"
     echo "  config             Show current configuration"
