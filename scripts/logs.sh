@@ -57,7 +57,17 @@ while [[ $# -gt 0 ]]; do
     --s3proxy) SHOW_S3PROXY=true; SHOW_ALL=false ;;
     --monitor) SHOW_MONITOR=true; SHOW_ALL=false ;;
     --sso) SHOW_SSO=true; SHOW_ALL=false ;;
-    --tail) LINES="$2"; shift ;;
+    --tail)
+      if [[ -z "${2:-}" ]]; then
+        echo "Error: --tail requires a number" >&2
+        exit 1
+      fi
+      if ! [[ "$2" =~ ^[0-9]+$ ]]; then
+        echo "Error: --tail requires a numeric value, got: $2" >&2
+        exit 1
+      fi
+      LINES="$2"; shift
+      ;;
     --follow) FOLLOW_MODE=true ;;
     --native) FORCE_MODE="native" ;;
     --container) FORCE_MODE="container" ;;
