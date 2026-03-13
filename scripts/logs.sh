@@ -92,6 +92,8 @@ NATIVE_LOG_DIR="$HOME/.bazel-aws-maven-proxy/logs"
 # Handle specific log requests (--s3proxy, --monitor, --sso)
 if $SHOW_S3PROXY; then
   if $FOLLOW_MODE; then
+    echo "Streaming s3proxy logs - Ctrl+C to stop..."
+    trap 'exit 0' INT TERM
     [ -f "$NATIVE_LOG_DIR/s3proxy.log" ] && tail -f "$NATIVE_LOG_DIR/s3proxy.log" || echo "No s3proxy logs found"
   else
     [ -f "$NATIVE_LOG_DIR/s3proxy.log" ] && tail -n "$LINES" "$NATIVE_LOG_DIR/s3proxy.log" || echo "No s3proxy logs found"
@@ -101,6 +103,8 @@ fi
 
 if $SHOW_MONITOR; then
   if $FOLLOW_MODE; then
+    echo "Streaming sso-monitor logs - Ctrl+C to stop..."
+    trap 'exit 0' INT TERM
     [ -f "$NATIVE_LOG_DIR/sso-monitor.log" ] && tail -f "$NATIVE_LOG_DIR/sso-monitor.log" || echo "No sso-monitor logs found"
   else
     [ -f "$NATIVE_LOG_DIR/sso-monitor.log" ] && tail -n "$LINES" "$NATIVE_LOG_DIR/sso-monitor.log" || echo "No sso-monitor logs found"
@@ -110,6 +114,8 @@ fi
 
 if $SHOW_SSO; then
   if $FOLLOW_MODE; then
+    echo "Streaming SSO watcher logs - Ctrl+C to stop..."
+    trap 'exit 0' INT TERM
     tail -f "$SSO_LOG" "$SSO_ERROR" 2>/dev/null
   else
     [ -f "$SSO_ERROR" ] && [ -s "$SSO_ERROR" ] && echo "=== errors ===" && tail -n "$LINES" "$SSO_ERROR"
