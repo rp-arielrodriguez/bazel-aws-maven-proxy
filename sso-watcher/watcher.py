@@ -367,6 +367,16 @@ def try_silent_refresh(profile: str) -> bool:
         "--region", region,
         "--no-sign-request",
     ]
+    
+    # Add CA bundle if set (for Netskope/corporate proxy SSL inspection)
+    ca_bundle = os.environ.get("AWS_CA_BUNDLE", "")
+    if ca_bundle:
+        log.info(f"silent refresh: AWS_CA_BUNDLE={ca_bundle}")
+        if os.path.isfile(ca_bundle):
+            cmd.extend(["--ca-bundle", ca_bundle])
+            log.info(f"silent refresh: added --ca-bundle to command")
+        else:
+            log.warning(f"silent refresh: CA bundle file not found: {ca_bundle}")
 
     try:
         proc = subprocess.run(

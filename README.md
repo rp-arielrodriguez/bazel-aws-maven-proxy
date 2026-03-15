@@ -314,23 +314,69 @@ If you see an error like:
 ```
 x509: certificate signed by unknown authority
 tls: failed to verify certificate
+SSL validation failed ... certificate verify failed
 ```
 
-Your network proxy is intercepting HTTPS and replacing certificates. Enable TLS skip for podman:
+Your network proxy is intercepting HTTPS and replacing certificates. There are two separate issues:
+
+#### 1. Container TLS (Podman only)
+
+For container image pulls, enable TLS skip:
 
 ```bash
-mise run tls-skip:enable
-mise run containers:restart
+bazel-proxy tls-skip:enable
 ```
 
 The setup wizard auto-detects this via a test pull and enables it automatically. To configure manually:
 
 ```bash
-mise run config:set SKIP_TLS_VERIFY=true
-mise run containers:restart
+bazel-proxy config:set SKIP_TLS_VERIFY=true
 ```
 
 > **Docker users:** `SKIP_TLS_VERIFY` only applies to Podman. For Docker, add the corporate CA certificate via Docker Desktop → Settings → Docker Engine, or mount it into `/etc/docker/certs.d/registry-1.docker.io/`.
+
+#### 2. SSL Inspection (Python/boto3/AWS CLI)
+
+If Python scripts (sso-monitor, sso-watcher) fail with SSL errors, your proxy is doing deep SSL inspection. The setup wizard auto-detects this and configures a CA bundle. To configure manually:
+
+```bash
+bazel-proxy detect-proxy
+```
+
+This will:
+1. Detect SSL inspection by checking AWS endpoint certificates
+2. Try to find your corporate CA certificate
+3. Create a combined CA bundle (system CAs + corporate CA)
+4. Configure `AWS_CA_BUNDLE` in `.env`
+
+**Common corporate CA locations:**
+
+| Vendor | macOS | Linux |
+|--------|-------|-------|
+| Netskope | `~/Library/Application Support/Netskope/STAgent/npatenantcert.pem` | `/opt/netskope/STAgent/` |
+| Zscaler | `~/Library/Application Support/Zscaler/` | `/opt/zscaler/` |
+| Palo Alto | `/Library/Application Support/PaloAltoNetworks/` | `/opt/paloaltonetworks/` |
+| Cisco | `/Library/Application Support/Cisco/` | `/opt/cisco/` |
+| Blue Coat | `/Library/Application Support/BlueCoat/` | `/opt/bluecoat/` |
+| Generic | `/Library/Keychains/System.keychain` | `/etc/ssl/certs/` |
+
+**Manual configuration:**
+
+If auto-detection fails, manually create a combined CA bundle:
+
+```bash
+# macOS: combine system CAs + corporate CA
+cat /etc/ssl/cert.pem ~/path/to/corporate-ca.pem > ~/.aws/combined-ca-bundle.pem
+
+# Linux: combine system CAs + corporate CA
+cat /etc/ssl/certs/ca-certificates.crt ~/path/to/corporate-ca.pem > ~/.aws/combined-ca-bundle.pem
+
+# Set in .env
+bazel-proxy config:set AWS_CA_BUNDLE=~/.aws/combined-ca-bundle.pem
+
+# Restart services
+bazel-proxy stop && bazel-proxy start
+```
 
 ## Documentation
 

@@ -100,6 +100,7 @@ class EnvConfig:
     proxy_port: str = "8888"
     sso_mode: str = "notify"
     skip_tls_verify: bool = False
+    aws_ca_bundle: str = ""
 
 
 @dataclass
@@ -525,6 +526,201 @@ def detect_tls_skip(ctx: SetupContext, engine: str) -> bool:
     return False
 
 
+# ---------------------------------------------------------------------------
+# Corporate Proxy SSL Inspection Detection
+# ---------------------------------------------------------------------------
+
+# Known public CAs that sign AWS certificates
+KNOWN_PUBLIC_CAS = [
+    "Amazon Root CA",
+    "DigiCert",
+    "GlobalSign",
+    "Let's Encrypt",
+    "Let's Encrypt Authority",
+    "ISRG Root",
+    "Starfield",
+    "GoDaddy",
+    "Comodo",
+    "Sectigo",
+    "GeoTrust",
+    "Thawte",
+    "VeriSign",
+]
+
+
+def detect_ssl_inspection(ctx: SetupContext) -> bool:
+    """Detect if behind corporate proxy doing SSL inspection.
+
+    Strategy:
+    1. Try to connect to an AWS endpoint
+    2. Retrieve the certificate chain
+    3. Check if root CA is a known public CA
+    4. If not recognized → SSL inspection detected
+
+    Returns True if SSL inspection is detected.
+    """
+    import ssl
+    import socket
+
+    try:
+        context = ssl.create_default_context()
+        with socket.create_connection(("sts.amazonaws.com", 443), timeout=10) as sock:
+            with context.wrap_socket(sock, server_hostname="sts.amazonaws.com") as ssock:
+                # Get the certificate
+                cert_dict = ssock.getpeercert()
+                if not cert_dict:
+                    return False
+
+                # Extract issuer from cert
+                issuer_tuple = cert_dict.get("issuer", ())
+                issuer_str = str(issuer_tuple)
+
+                # Check if issuer is a known public CA
+                for known_ca in KNOWN_PUBLIC_CAS:
+                    if known_ca.lower() in issuer_str.lower():
+                        return False
+
+                # Unknown CA → SSL inspection detected
+                return True
+
+    except Exception:
+        # Network error, timeout, etc. — can't detect
+        return False
+
+
+def find_corporate_ca(ctx: SetupContext) -> str | None:
+    """Find corporate CA certificate.
+
+    Strategy:
+    1. Export from system keychain (macOS)
+    2. Check common vendor locations
+    3. Return path or None
+
+    Returns path to corporate CA bundle, or None if not found.
+    """
+    import tempfile
+
+    # macOS: export from system keychain
+    if sys.platform == "darwin":
+        try:
+            # Export all certs from system keychain
+            result = ctx.run_cmd(
+                ["security", "export", "-k", "/Library/Keychains/System.keychain",
+                 "-t", "certs", "-p"],
+                timeout=10,
+            )
+            if result.ok and result.stdout:
+                # Parse to find non-public CA
+                certs = result.stdout.split("-----END CERTIFICATE-----")
+                corporate_certs = []
+                for cert in certs:
+                    if not cert.strip():
+                        continue
+                    cert += "-----END CERTIFICATE-----\n"
+                    # Check if this is a known public CA
+                    is_public = False
+                    for known_ca in KNOWN_PUBLIC_CAS:
+                        if known_ca.lower() in cert.lower():
+                            is_public = True
+                            break
+                    if not is_public and "BEGIN CERTIFICATE" in cert:
+                        corporate_certs.append(cert)
+
+                if corporate_certs:
+                    # Write to temp file
+                    bundle_path = Path.home() / ".aws" / "corporate-ca-bundle.pem"
+                    bundle_path.parent.mkdir(parents=True, exist_ok=True)
+                    bundle_path.write_text("\n".join(corporate_certs))
+                    return str(bundle_path)
+        except Exception:
+            pass
+
+    # Linux: check common locations
+    linux_paths = [
+        "/etc/ssl/certs/ca-certificates.crt",
+        "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+        "/etc/ssl/ca-bundle.pem",
+    ]
+    for path in linux_paths:
+        if Path(path).exists():
+            return path
+
+    return None
+
+
+def create_combined_ca_bundle(ctx: SetupContext, corporate_ca_path: str) -> str:
+    """Create combined CA bundle: system CAs + corporate CA.
+
+    Returns path to combined bundle.
+    """
+    bundle_path = Path.home() / ".aws" / "combined-ca-bundle.pem"
+    bundle_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # System CAs location
+    if sys.platform == "darwin":
+        system_cas_path = "/etc/ssl/cert.pem"
+    else:
+        system_cas_path = "/etc/ssl/certs/ca-certificates.crt"
+
+    # Combine
+    parts = []
+    if Path(system_cas_path).exists():
+        parts.append(Path(system_cas_path).read_text())
+
+    if Path(corporate_ca_path).exists():
+        parts.append(Path(corporate_ca_path).read_text())
+
+    bundle_path.write_text("\n\n".join(parts))
+    return str(bundle_path)
+
+
+def setup_ca_bundle(ctx: SetupContext) -> str | None:
+    """Setup CA bundle for corporate proxy SSL inspection.
+
+    Returns path to combined CA bundle, or None if not needed/found.
+    """
+    ctx.print("")
+    ctx.header("Checking for corporate proxy SSL inspection...")
+
+    # Step 1: Detect
+    if not detect_ssl_inspection(ctx):
+        ctx.ok("No SSL inspection detected")
+        return None
+
+    ctx.warn("SSL inspection detected (corporate proxy)")
+    ctx.print("  Your network proxy is intercepting HTTPS traffic.")
+
+    # Step 2: Try to find CA
+    corporate_ca = find_corporate_ca(ctx)
+
+    if corporate_ca:
+        ctx.ok(f"Found corporate CA: {corporate_ca}")
+    else:
+        # Step 3: Prompt user
+        ctx.print("")
+        ctx.print("  Could not automatically find corporate CA certificate.")
+        ctx.print("  Common locations:")
+        if sys.platform == "darwin":
+            ctx.print("    ~/Library/Application Support/<vendor>/")
+            ctx.print("    /Library/Application Support/<vendor>/")
+        else:
+            ctx.print("    /etc/ssl/certs/")
+            ctx.print("    /usr/local/share/ca-certificates/")
+        ctx.print("")
+        corporate_ca = ctx.prompt("Path to corporate CA certificate (or 'skip')", "skip")
+
+        if corporate_ca.lower() == "skip" or not Path(corporate_ca).exists():
+            ctx.warn("Skipping CA bundle setup")
+            ctx.print("  If you see SSL errors later, run: bazel-proxy detect-proxy")
+            return None
+
+    # Step 4: Create combined bundle
+    combined = create_combined_ca_bundle(ctx, corporate_ca)
+    ctx.ok(f"Created combined CA bundle: {combined}")
+
+    return combined
+
+
 def prompt_env_config(ctx: SetupContext, container_engine: str = "") -> EnvConfig:
     """Interactively prompt for .env values."""
     profiles = list_aws_profiles(ctx)
@@ -564,6 +760,11 @@ def generate_env_content(config: EnvConfig) -> str:
         if config.skip_tls_verify
         else "# SKIP_TLS_VERIFY=false"
     )
+    ca_bundle_line = (
+        f'AWS_CA_BUNDLE="{config.aws_ca_bundle}"'
+        if config.aws_ca_bundle
+        else "# AWS_CA_BUNDLE=~/.aws/combined-ca-bundle.pem"
+    )
     return f"""\
 # AWS Configuration
 AWS_PROFILE="{config.aws_profile}"
@@ -593,6 +794,11 @@ SSO_PROACTIVE_REFRESH_MINUTES=30
 # Set to true if behind a proxy that intercepts HTTPS and replaces certificates.
 # Enables --tls-verify=false for podman. For Docker, configure daemon-level CA trust.
 {skip_tls_line}
+
+# Corporate Proxy / SSL Inspection
+# Path to CA certificate bundle for SSL inspection bypass.
+# Required when behind corporate proxies that intercept HTTPS traffic.
+{ca_bundle_line}
 """
 
 
@@ -613,6 +819,10 @@ def configure_env(ctx: SetupContext, container_engine: str = "") -> EnvConfig:
     if write_env:
         ctx.print("")
         config = prompt_env_config(ctx, container_engine)
+        # Detect and setup CA bundle for corporate proxy SSL inspection
+        ca_bundle = setup_ca_bundle(ctx)
+        if ca_bundle:
+            config.aws_ca_bundle = ca_bundle
         content = generate_env_content(config)
         ctx.write_file(env_path, content)
         ctx.ok("Wrote .env")
@@ -653,6 +863,8 @@ def parse_existing_env(ctx: SetupContext, path: Path) -> EnvConfig:
             config.sso_mode = val
         elif key == "SKIP_TLS_VERIFY":
             config.skip_tls_verify = val.lower() in ("true", "1", "yes")
+        elif key == "AWS_CA_BUNDLE":
+            config.aws_ca_bundle = val
 
     return config
 
@@ -1485,6 +1697,25 @@ def main() -> None:
     global _RICH_AVAILABLE
     _ensure_tty()
     _RICH_AVAILABLE = _ensure_rich()
+
+    # Check for --detect-proxy flag
+    if "--detect-proxy" in sys.argv:
+        try:
+            ctx = SetupContext()
+            ca_bundle = setup_ca_bundle(ctx)
+            if ca_bundle:
+                ctx.print("")
+                ctx.ok(f"CA bundle configured: {ca_bundle}")
+                ctx.print("  Add to .env: AWS_CA_BUNDLE=\"{ca_bundle}\"")
+                ctx.print("  Then restart: bazel-proxy restart")
+            else:
+                ctx.print("")
+                ctx.ok("No corporate proxy SSL inspection detected")
+            sys.exit(0)
+        except KeyboardInterrupt:
+            print(f"\n{YELLOW}Interrupted.{NC}")
+            sys.exit(130)
+
     try:
         ctx = SetupContext()
         sys.exit(run_setup(ctx))

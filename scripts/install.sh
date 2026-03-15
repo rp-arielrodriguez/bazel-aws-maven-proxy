@@ -100,6 +100,8 @@ case "$CMD" in
     exec mise run sso-clean:cookies "$@" ;;
   check-update)
     exec mise run check-update "$@" ;;
+  detect-proxy)
+    exec python3 scripts/setup.py --detect-proxy ;;
   containers:*)
     exec mise run "$CMD" "$@" ;;
   config:set)
@@ -116,6 +118,7 @@ case "$CMD" in
     echo "  setup              Re-run interactive setup"
     echo "  upgrade            Smart upgrade (pull + selective rebuild)"
     echo "  check-update       Check if updates available"
+    echo "  detect-proxy       Detect and configure corporate proxy SSL inspection"
     echo "  uninstall          Uninstall everything"
     echo ""
     echo "SSO:"

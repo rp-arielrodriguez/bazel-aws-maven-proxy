@@ -18,6 +18,8 @@
 	<dict>
 		<key>AWS_PROFILE</key>
 		<string>{{AWS_PROFILE}}</string>
+		<key>AWS_CA_BUNDLE</key>
+		<string>{{AWS_CA_BUNDLE}}</string>
 		<key>SSO_SIGNAL_FILE</key>
 		<string>{{HOME}}/.aws/sso-renewer/login-required.json</string>
 		<key>SSO_STATE_DIR</key>
