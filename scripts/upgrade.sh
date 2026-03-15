@@ -68,10 +68,10 @@ if [ "$LOCAL" = "$REMOTE" ]; then
   if $NEED_SHIM; then
     echo ""
     echo "Command shim outdated — regenerating bazel-proxy..."
-    if bash scripts/install.sh --shim-only 2>&1; then
+    if INSTALL_DIR="$REPO_DIR" bash scripts/install.sh --shim-only 2>&1; then
       echo "✓ Command shim updated"
     else
-      echo "⚠ Shim regeneration failed — try: bash scripts/install.sh --shim-only"
+      echo "⚠ Shim regeneration failed — try: INSTALL_DIR=\"$REPO_DIR\" bash scripts/install.sh --shim-only"
     fi
   else
     echo "✓ Already up to date"
@@ -184,10 +184,10 @@ fi
 if $NEED_SHIM; then
   echo ""
   echo "Command shim outdated — regenerating bazel-proxy..."
-  if bash scripts/install.sh --shim-only 2>&1; then
+  if INSTALL_DIR="$REPO_DIR" bash scripts/install.sh --shim-only 2>&1; then
     ACTIONS_TAKEN="${ACTIONS_TAKEN:+$ACTIONS_TAKEN, }command shim updated"
   else
-    echo "⚠ Shim regeneration failed — try: bash scripts/install.sh --shim-only"
+    echo "⚠ Shim regeneration failed — try: INSTALL_DIR=\"$REPO_DIR\" bash scripts/install.sh --shim-only"
   fi
 fi
 
