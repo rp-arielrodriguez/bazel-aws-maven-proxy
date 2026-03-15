@@ -101,8 +101,9 @@ case "$CMD" in
   check-update)
     exec mise run check-update "$@" ;;
   detect-proxy)
-    exec python3 scripts/setup.py --detect-proxy ;;
-  containers:*)
+    shift
+    exec python3 scripts/setup.py --detect-proxy "$@" ;;
+  containers:*))
     exec mise run "$CMD" "$@" ;;
   config:set)
     exec mise run config:set "$@" ;;
@@ -118,7 +119,7 @@ case "$CMD" in
     echo "  setup              Re-run interactive setup"
     echo "  upgrade            Smart upgrade (pull + selective rebuild)"
     echo "  check-update       Check if updates available"
-    echo "  detect-proxy       Detect and configure corporate proxy SSL inspection"
+    echo "  detect-proxy [--force]  Detect and configure corporate proxy SSL inspection"
     echo "  uninstall          Uninstall everything"
     echo ""
     echo "SSO:"

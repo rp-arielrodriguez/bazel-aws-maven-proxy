@@ -337,17 +337,53 @@ bazel-proxy config:set SKIP_TLS_VERIFY=true
 
 #### 2. SSL Inspection (Python/boto3/AWS CLI)
 
-If Python scripts (sso-monitor, sso-watcher) fail with SSL errors, your proxy is doing deep SSL inspection. The setup wizard auto-detects this and configures a CA bundle. To configure manually:
+If Python scripts (sso-monitor, sso-watcher) fail with SSL errors, your proxy is doing deep SSL inspection. The setup wizard auto-detects this and configures a CA bundle. `bazel-proxy start` also auto-detects and fixes it.
+
+**Detection states:**
 
 ```bash
 bazel-proxy detect-proxy
 ```
 
-This will:
-1. Detect SSL inspection by checking AWS endpoint certificates
-2. Try to find your corporate CA certificate
-3. Create a combined CA bundle (system CAs + corporate CA)
-4. Configure `AWS_CA_BUNDLE` in `.env`
+This command has three possible outputs:
+
+1. **No proxy detected:**
+   ```
+   ✔ No SSL inspection detected
+   ```
+
+2. **Proxy detected, not configured:**
+   ```
+   ⚠ SSL inspection detected (corporate proxy)
+     Your network proxy is intercepting HTTPS traffic.
+     Found corporate CA: ~/.aws/combined-ca-bundle.pem
+     ✓ Created combined CA bundle
+     ✓ Updated .env: AWS_CA_BUNDLE="~/.aws/combined-ca-bundle.pem"
+     ✓ Reinstalled watcher to apply CA bundle
+     Connection verified ✓
+   ```
+
+3. **Proxy detected, already configured:**
+   ```
+   ✔ SSL inspection detected, already configured
+     AWS_CA_BUNDLE=~/.aws/combined-ca-bundle.pem
+     Connection verified ✓
+   ```
+
+**Force re-detection:**
+
+```bash
+bazel-proxy detect-proxy --force
+```
+
+Re-runs detection even if already configured. Useful if CA bundle changed or corrupted.
+
+**Auto-detection during start:**
+
+`bazel-proxy start` automatically detects SSL inspection and configures the CA bundle. If detected, you'll see:
+```
+Corporate proxy SSL inspection detected — auto-configuring...
+```
 
 **Common corporate CA locations:**
 
@@ -384,13 +420,13 @@ bazel-proxy stop && bazel-proxy start
 |----------|-------------|
 | [docs/sso-watcher.md](docs/sso-watcher.md) | SSO watcher architecture and internals |
 | [docs/state-machine.md](docs/state-machine.md) | State diagrams (Mermaid) for modes, signals, cooldown |
-| [docs/testing.md](docs/testing.md) | Test structure and coverage (482 tests) |
+| [docs/testing.md](docs/testing.md) | Test structure and coverage (489 tests) |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute |
 
 ## Testing
 
 ```bash
-pytest              # Run all 482 tests
+pytest              # Run all 489 tests
 ./run_tests.sh      # Helper script
 ```
 

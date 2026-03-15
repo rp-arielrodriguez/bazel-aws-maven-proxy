@@ -17,6 +17,21 @@ export REFRESH_INTERVAL="${REFRESH_INTERVAL:-60000}"
 export CACHE_DIR="${CACHE_DIR:-$HOME/.bazel-aws-maven-proxy/cache}"
 mkdir -p "$CACHE_DIR"
 
+# Check for corporate proxy SSL inspection (auto-fix if detected)
+if command -v python3 &>/dev/null && [ -f "$REPO_ROOT/scripts/setup.py" ]; then
+  PROXY_STATUS=$(python3 "$REPO_ROOT/scripts/setup.py" --check-proxy-status 2>/dev/null) || PROXY_STATUS=2
+  case "$PROXY_STATUS" in
+    0) ;;  # No proxy - continue
+    2) ;;  # Already configured - continue
+    1)     # Proxy detected but not configured - auto-fix
+      echo ""
+      echo "Corporate proxy SSL inspection detected — auto-configuring..."
+      python3 "$REPO_ROOT/scripts/setup.py" --detect-proxy 2>&1 || true
+      echo ""
+      ;;
+  esac
+fi
+
 # Check if already running
 if [ -f "$PIDFILE" ]; then
   OLD_PID=$(cat "$PIDFILE" 2>/dev/null || echo "")

@@ -548,44 +548,125 @@ KNOWN_PUBLIC_CAS = [
 ]
 
 
-def detect_ssl_inspection(ctx: SetupContext) -> bool:
-    """Detect if behind corporate proxy doing SSL inspection.
-
-    Strategy:
-    1. Try to connect to an AWS endpoint
-    2. Retrieve the certificate chain
-    3. Check if root CA is a known public CA
-    4. If not recognized → SSL inspection detected
-
-    Returns True if SSL inspection is detected.
+def _test_connection_with_ca(ca_path: str) -> bool:
+    """Test if connection works with given CA bundle.
+    
+    Returns True if SSL connection succeeds.
     """
     import ssl
     import socket
+    
+    if not Path(ca_path).exists():
+        return False
+    
+    try:
+        context = ssl.create_default_context()
+        context.load_verify_locations(ca_path)
+        with socket.create_connection(("sts.amazonaws.com", 443), timeout=10) as sock:
+            with context.wrap_socket(sock, server_hostname="sts.amazonaws.com"):
+                return True
+    except Exception:
+        return False
 
+
+def _test_connection_without_ca() -> bool:
+    """Test if connection works without special CA bundle.
+    
+    Returns True if SSL connection succeeds (no proxy).
+    Returns False if SSL verification fails (proxy detected).
+    """
+    import ssl
+    import socket
+    
     try:
         context = ssl.create_default_context()
         with socket.create_connection(("sts.amazonaws.com", 443), timeout=10) as sock:
             with context.wrap_socket(sock, server_hostname="sts.amazonaws.com") as ssock:
-                # Get the certificate
+                # Connection succeeded - check if cert is from known CA
                 cert_dict = ssock.getpeercert()
                 if not cert_dict:
-                    return False
-
-                # Extract issuer from cert
+                    return True
+                
                 issuer_tuple = cert_dict.get("issuer", ())
                 issuer_str = str(issuer_tuple)
-
-                # Check if issuer is a known public CA
+                
                 for known_ca in KNOWN_PUBLIC_CAS:
                     if known_ca.lower() in issuer_str.lower():
-                        return False
-
-                # Unknown CA → SSL inspection detected
-                return True
-
-    except Exception:
-        # Network error, timeout, etc. — can't detect
+                        return True
+                
+                # Unknown CA but connection succeeded (rare case)
+                return False
+    except ssl.SSLCertVerificationError:
         return False
+    except Exception:
+        return False
+
+
+def _get_current_ca_bundle(ctx: SetupContext) -> str | None:
+    """Get current AWS_CA_BUNDLE from environment or .env file.
+    
+    Returns path or None if not set.
+    """
+    # Check environment first
+    ca_bundle = ctx.env.get("AWS_CA_BUNDLE", "")
+    if ca_bundle:
+        return ca_bundle
+    
+    # Check .env file
+    env_path = ctx.repo_root / ".env"
+    if not ctx.file_exists(env_path):
+        return None
+    
+    try:
+        content = ctx.read_file(env_path)
+    except (OSError, PermissionError):
+        return None
+    
+    for line in content.splitlines():
+        line = line.strip()
+        if line.startswith("AWS_CA_BUNDLE="):
+            value = line.split("=", 1)[1].strip().strip('"').strip("'")
+            # Expand $HOME
+            if "$HOME" in value:
+                home = ctx.env.get("HOME", str(Path.home()))
+                value = value.replace("$HOME", home)
+            return value
+    
+    return None
+
+
+def detect_proxy_status(ctx: SetupContext) -> str:
+    """Detect corporate proxy SSL inspection status.
+    
+    Returns:
+        "none" - no SSL inspection detected
+        "detected" - SSL inspection detected, needs configuration
+        "configured" - SSL inspection detected, already configured
+    """
+    # Step 1: Check if connection works without CA bundle
+    if _test_connection_without_ca():
+        return "none"
+    
+    # Step 2: Connection fails without CA - proxy exists
+    # Check if already configured
+    ca_bundle = _get_current_ca_bundle(ctx)
+    
+    if ca_bundle and Path(ca_bundle).exists():
+        # Verify it works
+        if _test_connection_with_ca(ca_bundle):
+            return "configured"
+    
+    # Step 3: Proxy detected but not configured
+    return "detected"
+
+
+def detect_ssl_inspection(ctx: SetupContext) -> bool:
+    """Legacy function - returns True if proxy detected (any state).
+    
+    Kept for backward compatibility.
+    """
+    status = detect_proxy_status(ctx)
+    return status != "none"
 
 
 def find_corporate_ca(ctx: SetupContext) -> str | None:
@@ -674,25 +755,46 @@ def create_combined_ca_bundle(ctx: SetupContext, corporate_ca_path: str) -> str:
     return str(bundle_path)
 
 
-def setup_ca_bundle(ctx: SetupContext) -> str | None:
+def setup_ca_bundle(ctx: SetupContext, force: bool = False) -> tuple[str | None, bool]:
     """Setup CA bundle for corporate proxy SSL inspection.
-
-    Returns path to combined CA bundle, or None if not needed/found.
+    
+    Args:
+        ctx: Setup context
+        force: If True, re-run detection even if already configured
+    
+    Returns:
+        (ca_bundle_path, needs_watcher_reinstall)
     """
     ctx.print("")
     ctx.header("Checking for corporate proxy SSL inspection...")
-
-    # Step 1: Detect
-    if not detect_ssl_inspection(ctx):
+    
+    # Step 1: Detect status
+    status = detect_proxy_status(ctx)
+    
+    if status == "none":
         ctx.ok("No SSL inspection detected")
-        return None
-
+        return (None, False)
+    
+    if status == "configured" and not force:
+        # Already configured - verify and return
+        ca_bundle = _get_current_ca_bundle(ctx)
+        ctx.ok("SSL inspection detected, already configured")
+        ctx.print(f"  AWS_CA_BUNDLE={ca_bundle}")
+        if ca_bundle and _test_connection_with_ca(ca_bundle):
+            ctx.print("  Connection verified ✓")
+            return (ca_bundle, False)
+        else:
+            ctx.warn("  CA bundle configured but connection failed")
+            ctx.print("  Re-running detection...")
+            status = "detected"
+    
+    # status == "detected" or force
     ctx.warn("SSL inspection detected (corporate proxy)")
     ctx.print("  Your network proxy is intercepting HTTPS traffic.")
-
+    
     # Step 2: Try to find CA
     corporate_ca = find_corporate_ca(ctx)
-
+    
     if corporate_ca:
         ctx.ok(f"Found corporate CA: {corporate_ca}")
     else:
@@ -708,17 +810,89 @@ def setup_ca_bundle(ctx: SetupContext) -> str | None:
             ctx.print("    /usr/local/share/ca-certificates/")
         ctx.print("")
         corporate_ca = ctx.prompt("Path to corporate CA certificate (or 'skip')", "skip")
-
+        
         if corporate_ca.lower() == "skip" or not Path(corporate_ca).exists():
             ctx.warn("Skipping CA bundle setup")
             ctx.print("  If you see SSL errors later, run: bazel-proxy detect-proxy")
-            return None
-
+            return (None, False)
+    
     # Step 4: Create combined bundle
     combined = create_combined_ca_bundle(ctx, corporate_ca)
     ctx.ok(f"Created combined CA bundle: {combined}")
+    
+    # Step 5: Update .env file
+    env_path = ctx.repo_root / ".env"
+    if ctx.file_exists(env_path):
+        try:
+            content = ctx.read_file(env_path)
+            # Check if AWS_CA_BUNDLE already set
+            lines = content.splitlines()
+            updated = False
+            new_lines = []
+            for line in lines:
+                if line.strip().startswith("AWS_CA_BUNDLE="):
+                    new_lines.append(f'AWS_CA_BUNDLE="{combined}"')
+                    updated = True
+                else:
+                    new_lines.append(line)
+            
+            if not updated:
+                # Add after SKIP_TLS_VERIFY or at end
+                inserted = False
+                final_lines = []
+                for i, line in enumerate(new_lines):
+                    final_lines.append(line)
+                    if "SKIP_TLS_VERIFY" in line and not inserted:
+                        final_lines.append("")
+                        final_lines.append("# Corporate Proxy / SSL Inspection")
+                        final_lines.append(f'AWS_CA_BUNDLE="{combined}"')
+                        inserted = True
+                if not inserted:
+                    final_lines.append("")
+                    final_lines.append("# Corporate Proxy / SSL Inspection")
+                    final_lines.append(f'AWS_CA_BUNDLE="{combined}"')
+                new_lines = final_lines
+            
+            ctx.write_file(env_path, "\n".join(new_lines) + "\n")
+            ctx.ok(f"Updated .env: AWS_CA_BUNDLE=\"{combined}\"")
+        except Exception:
+            ctx.warn("Could not update .env file")
+    
+    # Step 6: Verify connection
+    if _test_connection_with_ca(combined):
+        ctx.print("  Connection verified ✓")
+    else:
+        ctx.warn("  Connection test failed - CA bundle may be incomplete")
+    
+    return (combined, True)  # needs watcher reinstall
 
-    return combined
+
+def reinstall_watcher_if_needed(ctx: SetupContext, ca_bundle: str) -> None:
+    """Reinstall watcher if AWS_CA_BUNDLE changed.
+    
+    Only reinstalls if watcher is installed and CA bundle differs.
+    """
+    if sys.platform != "darwin":
+        return
+    
+    plist_path = Path.home() / "Library/LaunchAgents/com.bazel.sso-watcher.plist"
+    if not plist_path.exists():
+        return
+    
+    try:
+        plist_content = plist_path.read_text()
+    except (OSError, PermissionError):
+        return
+    
+    # Check if plist has correct AWS_CA_BUNDLE
+    if ca_bundle and ca_bundle not in plist_content:
+        ctx.print("")
+        ctx.print("  Reinstalling watcher to apply CA bundle...")
+        result = ctx.run_cmd(["bash", "scripts/sso-install.sh"], timeout=60)
+        if result.ok:
+            ctx.ok("Watcher reinstalled")
+        else:
+            ctx.warn("Watcher reinstall failed - run manually: bazel-proxy install")
 
 
 def prompt_env_config(ctx: SetupContext, container_engine: str = "") -> EnvConfig:
@@ -820,9 +994,11 @@ def configure_env(ctx: SetupContext, container_engine: str = "") -> EnvConfig:
         ctx.print("")
         config = prompt_env_config(ctx, container_engine)
         # Detect and setup CA bundle for corporate proxy SSL inspection
-        ca_bundle = setup_ca_bundle(ctx)
+        ca_bundle, needs_reinstall = setup_ca_bundle(ctx)
         if ca_bundle:
             config.aws_ca_bundle = ca_bundle
+            if needs_reinstall:
+                reinstall_watcher_if_needed(ctx, ca_bundle)
         content = generate_env_content(config)
         ctx.write_file(env_path, content)
         ctx.ok("Wrote .env")
@@ -1697,25 +1873,46 @@ def main() -> None:
     global _RICH_AVAILABLE
     _ensure_tty()
     _RICH_AVAILABLE = _ensure_rich()
-
-    # Check for --detect-proxy flag
-    if "--detect-proxy" in sys.argv:
+    
+    # Check for --check-proxy-status flag (for bazel-proxy start)
+    if "--check-proxy-status" in sys.argv:
         try:
             ctx = SetupContext()
-            ca_bundle = setup_ca_bundle(ctx)
+            status = detect_proxy_status(ctx)
+            # Exit codes: 0 = none, 1 = detected, 2 = configured
+            if status == "none":
+                sys.exit(0)
+            elif status == "configured":
+                sys.exit(2)
+            else:  # detected
+                sys.exit(1)
+        except Exception:
+            sys.exit(1)
+    
+    # Check for --detect-proxy flag
+    if "--detect-proxy" in sys.argv:
+        force = "--force" in sys.argv
+        try:
+            ctx = SetupContext()
+            ca_bundle, needs_reinstall = setup_ca_bundle(ctx, force=force)
             if ca_bundle:
+                if needs_reinstall:
+                    reinstall_watcher_if_needed(ctx, ca_bundle)
                 ctx.print("")
-                ctx.ok(f"CA bundle configured: {ca_bundle}")
-                ctx.print("  Add to .env: AWS_CA_BUNDLE=\"{ca_bundle}\"")
-                ctx.print("  Then restart: bazel-proxy restart")
             else:
                 ctx.print("")
-                ctx.ok("No corporate proxy SSL inspection detected")
-            sys.exit(0)
+            # Exit codes: 0 = none or configured, 1 = detected (needs config), 2 = error
+            status = detect_proxy_status(ctx)
+            if status == "none":
+                sys.exit(0)
+            elif status == "configured":
+                sys.exit(0)
+            else:
+                sys.exit(1)
         except KeyboardInterrupt:
             print(f"\n{YELLOW}Interrupted.{NC}")
             sys.exit(130)
-
+    
     try:
         ctx = SetupContext()
         sys.exit(run_setup(ctx))
