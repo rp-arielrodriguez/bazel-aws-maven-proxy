@@ -420,13 +420,13 @@ bazel-proxy stop && bazel-proxy start
 |----------|-------------|
 | [docs/sso-watcher.md](docs/sso-watcher.md) | SSO watcher architecture and internals |
 | [docs/state-machine.md](docs/state-machine.md) | State diagrams (Mermaid) for modes, signals, cooldown |
-| [docs/testing.md](docs/testing.md) | Test structure and coverage (489 tests) |
+| [docs/testing.md](docs/testing.md) | Test structure and coverage (492 tests) |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute |
 
 ## Testing
 
 ```bash
-pytest              # Run all 489 tests
+pytest              # Run all 492 tests
 ./run_tests.sh      # Helper script
 ```
 

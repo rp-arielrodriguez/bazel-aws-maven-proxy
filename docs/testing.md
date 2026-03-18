@@ -24,7 +24,7 @@ tests/
 
 ## Test Coverage
 
-**489 passing tests** (22 s3proxy + 224 watcher + 52 monitor + 191 setup)
+**492 passing tests** (22 s3proxy + 224 watcher + 52 monitor + 194 setup)
 
 ### S3 Proxy Tests (`tests/unit/test_s3proxy.py`)
 

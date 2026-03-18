@@ -2956,3 +2956,56 @@ class TestProxyDetection:
             from scripts.setup import main
         finally:
             sys.argv = original_argv
+
+    def test_update_aws_profiles_ca_bundle(self):
+        """Update ca_bundle in AWS profiles."""
+        from scripts.setup import update_aws_profiles_ca_bundle
+        
+        home = str(Path.home())
+        config_path = f"{home}/.aws/config"
+        
+        ctx = MockSetupContext()
+        old_config = """[profile bazel-proxy]
+sso_account_id = 123456789012
+sso_role_name = TestRole
+ca_bundle = /old/path/to/bundle.pem
+
+[profile other]
+ca_bundle = /another/old/path.pem
+"""
+        ctx._files[config_path] = old_config
+        
+        update_aws_profiles_ca_bundle(ctx, "/new/path/to/combined.pem")
+        
+        updated_config = ctx._files.get(config_path, "")
+        assert "/new/path/to/combined.pem" in updated_config
+        assert "/old/path/to/bundle.pem" not in updated_config
+        assert "/another/old/path.pem" not in updated_config
+
+    def test_update_aws_profiles_no_change_needed(self):
+        """No update if ca_bundle already correct."""
+        from scripts.setup import update_aws_profiles_ca_bundle
+        
+        home = str(Path.home())
+        config_path = f"{home}/.aws/config"
+        
+        ctx = MockSetupContext()
+        old_config = """[profile test]
+ca_bundle = /correct/path.pem
+"""
+        ctx._files[config_path] = old_config
+        
+        update_aws_profiles_ca_bundle(ctx, "/correct/path.pem")
+        
+        # Should be unchanged
+        assert ctx._files.get(config_path, "") == old_config
+
+    def test_update_aws_profiles_no_config_file(self):
+        """No error when config file missing."""
+        from scripts.setup import update_aws_profiles_ca_bundle
+        
+        ctx = MockSetupContext()
+        # No config file created
+        
+        # Should not crash
+        update_aws_profiles_ca_bundle(ctx, "/new/path.pem")

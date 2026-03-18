@@ -858,6 +858,9 @@ def setup_ca_bundle(ctx: SetupContext, force: bool = False) -> tuple[str | None,
         except Exception:
             ctx.warn("Could not update .env file")
     
+    # Step 5.5: Update AWS profiles
+    update_aws_profiles_ca_bundle(ctx, combined)
+    
     # Step 6: Verify connection
     if _test_connection_with_ca(combined):
         ctx.print("  Connection verified ✓")
@@ -893,6 +896,40 @@ def reinstall_watcher_if_needed(ctx: SetupContext, ca_bundle: str) -> None:
             ctx.ok("Watcher reinstalled")
         else:
             ctx.warn("Watcher reinstall failed - run manually: bazel-proxy install")
+
+
+def update_aws_profiles_ca_bundle(ctx: SetupContext, ca_bundle: str) -> None:
+    """Update ca_bundle in all AWS profiles that have it set.
+    
+    Updates ~/.aws/config to use the new CA bundle path.
+    """
+    config_path = Path.home() / ".aws" / "config"
+    if not ctx.file_exists(config_path):
+        return
+    
+    try:
+        content = ctx.read_file(config_path)
+    except (OSError, PermissionError):
+        return
+    
+    lines = content.splitlines()
+    updated = False
+    new_lines = []
+    
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("ca_bundle ="):
+            old_path = stripped.split("=", 1)[1].strip()
+            if old_path and old_path != ca_bundle:
+                indent = line[:len(line) - len(line.lstrip())]
+                new_lines.append(f"{indent}ca_bundle = {ca_bundle}")
+                updated = True
+                continue
+        new_lines.append(line)
+    
+    if updated:
+        ctx.write_file(config_path, "\n".join(new_lines) + "\n")
+        ctx.ok("Updated AWS profiles to use new CA bundle")
 
 
 def prompt_env_config(ctx: SetupContext, container_engine: str = "") -> EnvConfig:
