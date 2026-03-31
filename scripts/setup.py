@@ -1086,8 +1086,37 @@ def parse_existing_env(ctx: SetupContext, path: Path) -> EnvConfig:
 # Phase 3: Install tools via mise
 # ---------------------------------------------------------------------------
 
+def _pip_install_requirements(ctx: SetupContext) -> bool:
+    """Install pip dependencies from requirements.txt files."""
+    req_files = [
+        ctx.repo_root / "s3proxy" / "requirements.txt",
+        ctx.repo_root / "sso-monitor" / "requirements.txt",
+    ]
+    existing = [str(f) for f in req_files if ctx.file_exists(f)]
+    if not existing:
+        return True
+
+    py = ctx.run_cmd(["mise", "which", "python"])
+    if not py.ok:
+        ctx.warn("Could not resolve mise python — skipping pip install")
+        return False
+    pip_path = str(Path(py.stdout.strip()).parent / "pip")
+
+    all_ok = True
+    for req in existing:
+        r = ctx.run_cmd_live(
+            [pip_path, "install", "-r", req, "-q"],
+            timeout=120,
+            spinner_text="Installing dependencies...",
+        )
+        if not r.ok:
+            ctx.warn(f"pip install failed for {req}")
+            all_ok = False
+    return all_ok
+
+
 def install_tools(ctx: SetupContext) -> bool:
-    """Phase 3: Run mise install. Returns True on success."""
+    """Phase 3: Run mise install + pip dependencies. Returns True on success."""
     ctx.header("Installing tools via mise...")
     r = ctx.run_cmd_live(["mise", "install", "--yes"], timeout=300,
                          spinner_text="Installing tools...")
@@ -1099,6 +1128,8 @@ def install_tools(ctx: SetupContext) -> bool:
     ver = py.stdout.strip().split()[-1] if py.ok else "unknown"
     ctx.ok(f"Python {ver}")
     ctx.print("")
+
+    _pip_install_requirements(ctx)
     return True
 
 
