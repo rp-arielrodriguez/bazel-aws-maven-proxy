@@ -7,6 +7,19 @@ PIDFILE="$HOME/.bazel-aws-maven-proxy/s3proxy.pid"
 LOG_DIR="$HOME/.bazel-aws-maven-proxy/logs"
 mkdir -p "$HOME/.bazel-aws-maven-proxy" "$LOG_DIR"
 
+# Resolve mise-managed Python (has dependencies installed)
+PY3=""
+if command -v mise &>/dev/null; then
+    PY3="$(mise which python 2>/dev/null || echo "")"
+fi
+if [ -z "$PY3" ]; then
+    PY3="$(command -v python3 2>/dev/null || echo "")"
+fi
+if [ -z "$PY3" ]; then
+    echo "✗ python3 not found"
+    exit 1
+fi
+
 # Load environment
 export AWS_PROFILE="${AWS_PROFILE:-default}"
 export AWS_REGION="${AWS_REGION:-us-west-2}"
@@ -18,15 +31,15 @@ export CACHE_DIR="${CACHE_DIR:-$HOME/.bazel-aws-maven-proxy/cache}"
 mkdir -p "$CACHE_DIR"
 
 # Check for corporate proxy SSL inspection (auto-fix if detected)
-if command -v python3 &>/dev/null && [ -f "$REPO_ROOT/scripts/setup.py" ]; then
-  PROXY_STATUS=$(python3 "$REPO_ROOT/scripts/setup.py" --check-proxy-status 2>/dev/null) || PROXY_STATUS=2
+if [ -f "$REPO_ROOT/scripts/setup.py" ]; then
+  PROXY_STATUS=$($PY3 "$REPO_ROOT/scripts/setup.py" --check-proxy-status 2>/dev/null) || PROXY_STATUS=2
   case "$PROXY_STATUS" in
     0) ;;  # No proxy - continue
     2) ;;  # Already configured - continue
     1)     # Proxy detected but not configured - auto-fix
       echo ""
       echo "Corporate proxy SSL inspection detected — auto-configuring..."
-      python3 "$REPO_ROOT/scripts/setup.py" --detect-proxy 2>&1 || true
+      $PY3 "$REPO_ROOT/scripts/setup.py" --detect-proxy 2>&1 || true
       echo ""
       ;;
   esac
@@ -67,7 +80,7 @@ if command -v gunicorn &>/dev/null; then
 else
   echo "⚠ Gunicorn not found, using Flask dev server (not recommended for production)"
   echo "  Install with: pip install gunicorn"
-  python3 app.py > "$LOG_DIR/s3proxy.log" 2>&1 &
+  $PY3 app.py > "$LOG_DIR/s3proxy.log" 2>&1 &
 fi
 
 PID=$!
