@@ -49,7 +49,7 @@ from setup import (
     print_summary,
     prompt_env_config,
     run_setup,
-    start_containers,
+    start_services,
 )
 
 
@@ -1531,45 +1531,84 @@ class TestFirstLoginAndValidate:
 
 
 # ===================================================================
-# TestStartContainers
+# TestStartServices
 # ===================================================================
 
-class TestStartContainers:
+class TestStartServices:
     def test_user_says_yes(self):
+        """User accepts starting native services."""
         ctx = MockSetupContext(
             confirms=[True],
             commands={
-                "bash": CmdResult(1),  # _containers_running → not running
-                ("mise", "run", "containers:up"): CmdResult(0),
+                ("mise", "run", "start"): CmdResult(0),
             },
         )
-        assert start_containers(ctx) is True
+        # Mock no PID files exist (services not running)
+        assert start_services(ctx) is True
 
     def test_user_says_no(self):
+        """User declines starting services."""
         ctx = MockSetupContext(
             confirms=[False],
-            commands={"bash": CmdResult(1)},  # not running
         )
-        assert start_containers(ctx) is False
+        assert start_services(ctx) is False
 
     def test_start_fails(self):
+        """Service start command fails."""
         ctx = MockSetupContext(
             confirms=[True],
             commands={
-                "bash": CmdResult(1),  # not running
-                ("mise", "run", "containers:up"): CmdResult(1, "", "error"),
+                ("mise", "run", "start"): CmdResult(1, "", "error"),
             },
         )
-        assert start_containers(ctx) is False
+        assert start_services(ctx) is False
         assert any("failed" in m.lower() for m in ctx.get_output())
 
     def test_skips_when_already_running(self):
-        """Containers already running → skip prompt, return True."""
+        """Services already running → skip prompt, return True."""
+        home = str(Path.home())
+        s3proxy_pid = f"{home}/.bazel-aws-maven-proxy/s3proxy.pid"
+        monitor_pid = f"{home}/.bazel-aws-maven-proxy/sso-monitor.pid"
+        
+        # Create PID files with valid-looking PIDs
+        ctx = MockSetupContext()
+        ctx._files[s3proxy_pid] = "12345"
+        ctx._files[monitor_pid] = "12346"
+        
+        # Mock os.kill to not raise exception
+        import os
+        original_kill = os.kill
+        os.kill = lambda pid, sig: None
+        
+        try:
+            assert start_services(ctx) is True
+            assert any("already running" in m.lower() for m in ctx.get_output())
+        finally:
+            os.kill = original_kill
+
+    def test_partial_services_not_running(self):
+        """Only one service running → prompt to start."""
+        home = str(Path.home())
+        s3proxy_pid = f"{home}/.bazel-aws-maven-proxy/s3proxy.pid"
+        
         ctx = MockSetupContext(
-            commands={"bash": CmdResult(0, "s3proxy\nsso-monitor\n")},
+            confirms=[True],
+            commands={
+                ("mise", "run", "start"): CmdResult(0),
+            },
         )
-        assert start_containers(ctx) is True
-        assert any("already running" in m.lower() for m in ctx.get_output())
+        # Only s3proxy PID exists, not monitor
+        ctx._files[s3proxy_pid] = "12345"
+        
+        import os
+        original_kill = os.kill
+        os.kill = lambda pid, sig: None
+        
+        try:
+            assert start_services(ctx) is True
+        finally:
+            os.kill = original_kill
+
 
 
 # ===================================================================
@@ -2484,7 +2523,7 @@ class TestRunSetupScenarios:
                     CmdResult(0, '{"Account":"123"}\n'),
                 ("aws", "s3", "ls", "s3://my-bucket/", "--profile", "default"):
                     CmdResult(0, "file.jar\n"),
-                ("mise", "run", "containers:up"): CmdResult(0),
+                ("mise", "run", "start"): CmdResult(0),
             },
             prompts=["default", "us-west-2", "my-bucket", "8888", "notify"],
             confirms=[True],  # start containers
@@ -2511,7 +2550,7 @@ class TestRunSetupScenarios:
                     CmdResult(0, '{"Account":"123"}\n'),
                 ("aws", "s3", "ls", "s3://existing-bucket/", "--profile", "my-profile"):
                     CmdResult(0, "file.jar\n"),
-                ("mise", "run", "containers:up"): CmdResult(0),
+                ("mise", "run", "start"): CmdResult(0),
             },
             extra_files={
                 str(Path("/fake/repo/.env")): env_content,
@@ -2582,7 +2621,7 @@ class TestRunSetupScenarios:
                     CmdResult(0, "my-sess\n"),
                 ("aws", "sts", "get-caller-identity", "--profile", "default"):
                     CmdResult(0, '{"Account":"123"}\n'),
-                ("mise", "run", "containers:up"): CmdResult(0),
+                ("mise", "run", "start"): CmdResult(0),
             },
             prompts=["default", "us-west-2", "your-maven-bucket", "8888", "notify"],
             confirms=[True],
@@ -2602,7 +2641,7 @@ class TestRunSetupScenarios:
                     CmdResult(0, '{"Account":"123"}\n'),
                 ("aws", "s3", "ls", "s3://my-bucket/", "--profile", "default"):
                     CmdResult(0, "file.jar\n"),
-                ("mise", "run", "containers:up"): CmdResult(0),
+                ("mise", "run", "start"): CmdResult(0),
             },
             prompts=["default", "us-west-2", "my-bucket", "8888", "notify"],
             confirms=[True],
@@ -2625,7 +2664,7 @@ class TestRunSetupScenarios:
                     CmdResult(0, '{"Account":"123"}\n'),
                 ("aws", "s3", "ls", "s3://my-bucket/", "--profile", "default"):
                     CmdResult(0, "file.jar\n"),
-                ("mise", "run", "containers:up"): CmdResult(0),
+                ("mise", "run", "start"): CmdResult(0),
             },
             prompts=["default", "us-west-2", "my-bucket", "8888", "notify"],
             confirms=[True],
@@ -2645,7 +2684,7 @@ class TestRunSetupScenarios:
                     CmdResult(0, '{"Account":"123"}\n'),
                 ("aws", "s3", "ls", "s3://my-bucket/", "--profile", "default"):
                     CmdResult(0, "file.jar\n"),
-                ("mise", "run", "containers:up"): CmdResult(0),
+                ("mise", "run", "start"): CmdResult(0),
             },
             prompts=["default", "us-west-2", "my-bucket", "8888", "bogus"],
             confirms=[True],
@@ -2669,7 +2708,7 @@ class TestRunSetupScenarios:
                     CmdResult(0, '{"Account":"123"}\n'),
                 ("aws", "s3", "ls", "s3://my-bucket/", "--profile", "default"):
                     CmdResult(0, "file.jar\n"),
-                ("mise", "run", "containers:up"): CmdResult(0),
+                ("mise", "run", "start"): CmdResult(0),
             },
             prompts=["default", "us-west-2", "my-bucket", "8888", "notify"],
             confirms=[True],
@@ -2679,8 +2718,8 @@ class TestRunSetupScenarios:
         assert "legacy" in out.lower()
         assert "Setup complete" in out
 
-    def test_container_start_fails(self):
-        """Scenario 18: containers:up fails → warns, rc=0."""
+    def test_service_start_fails(self):
+        """Scenario 18: start fails → warns, rc=0."""
         ctx = self._base_ctx(
             extra_commands={
                 ("aws", "configure", "get", "sso_session", "--profile", "default"):
@@ -2689,14 +2728,14 @@ class TestRunSetupScenarios:
                     CmdResult(0, '{"Account":"123"}\n'),
                 ("aws", "s3", "ls", "s3://my-bucket/", "--profile", "default"):
                     CmdResult(0, "file.jar\n"),
-                ("mise", "run", "containers:up"): CmdResult(1, "", "compose error"),
+                ("mise", "run", "start"): CmdResult(1, "", "start error"),
             },
             prompts=["default", "us-west-2", "my-bucket", "8888", "notify"],
             confirms=[True],
         )
         assert run_setup(ctx) == 0
         out = output_text(ctx)
-        assert "container" in out.lower() and "fail" in out.lower()
+        assert "fail" in out.lower()
         assert "Setup complete" in out
 
     def test_aws_too_old_full_flow(self):
@@ -2720,7 +2759,7 @@ class TestRunSetupScenarios:
                     CmdResult(0, "my-sess\n"),
                 ("aws", "sts", "get-caller-identity", "--profile", "default"):
                     CmdResult(0, '{"Account":"123"}\n'),
-                ("mise", "run", "containers:up"): CmdResult(0),
+                ("mise", "run", "start"): CmdResult(0),
             },
             prompts=["default", "us-west-2", "my-bucket", "8888", "notify"],
             confirms=[True],
@@ -2776,7 +2815,7 @@ class TestRunSetupScenarios:
                     CmdResult(0, '{"Account":"222222222222"}\n'),
                 ("aws", "s3", "ls", "s3://my-bucket/", "--profile", "myprof"):
                     CmdResult(0, "file.jar\n"),
-                ("mise", "run", "containers:up"): CmdResult(0),
+                ("mise", "run", "start"): CmdResult(0),
             },
             extra_files={config_path: ""},
             prompts=[
@@ -2827,7 +2866,7 @@ sso_role_name = MyRole
                 ("aws", "s3", "ls", "s3://my-bucket/", "--profile", "bazel-proxy"):
                     CmdResult(0, "file.jar\n"),
                 "python3": CmdResult(0),  # do_sso_login (won't be called — creds valid)
-                ("mise", "run", "containers:up"): CmdResult(0),
+                ("mise", "run", "start"): CmdResult(0),
             },
             extra_files={config_path: legacy_config},
             prompts=["bazel-proxy", "us-east-1", "my-bucket", "8888", "notify"],
@@ -2869,7 +2908,7 @@ sso_role_name = MyRole
                     CmdResult(0, '{"Account":"123456789012"}\n'),
                 ("aws", "s3", "ls", "s3://my-bucket/", "--profile", "bazel-proxy"):
                     CmdResult(0, "file.jar\n"),
-                ("mise", "run", "containers:up"): CmdResult(0),
+                ("mise", "run", "start"): CmdResult(0),
             },
             extra_files={config_path: legacy_config},
             prompts=["bazel-proxy", "us-east-1", "my-bucket", "8888", "notify"],

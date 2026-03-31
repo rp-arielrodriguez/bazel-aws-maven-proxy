@@ -1773,38 +1773,47 @@ def first_login_and_validate(ctx: SetupContext, config: EnvConfig,
 
 
 # ---------------------------------------------------------------------------
-# Phase 8: Start containers
+# Phase 8: Start services (native mode)
 # ---------------------------------------------------------------------------
 
-def _containers_running(ctx: SetupContext) -> bool:
-    """Check if proxy containers are already running and healthy."""
-    r = ctx.run_cmd(["bash", "-c",
-                     "source scripts/container-engine.sh && "
-                     "$COMPOSE_CMD ps --status running --format '{{.Name}}' 2>/dev/null"],
-                    timeout=15)
-    if not r.ok:
-        return False
-    names = [n.strip() for n in r.stdout.strip().splitlines() if n.strip()]
-    return len(names) >= 2  # s3proxy + sso-monitor
+def _services_running(ctx: SetupContext) -> bool:
+    """Check if native services are already running."""
+    s3proxy_pid = Path.home() / ".bazel-aws-maven-proxy/s3proxy.pid"
+    monitor_pid = Path.home() / ".bazel-aws-maven-proxy/sso-monitor.pid"
+    
+    for pidfile in [s3proxy_pid, monitor_pid]:
+        if not ctx.file_exists(pidfile):
+            return False
+        try:
+            content = ctx.read_file(pidfile).strip()
+            if not content:
+                return False
+            pid = int(content)
+            import os
+            os.kill(pid, 0)
+        except (ValueError, ProcessLookupError, OSError, PermissionError):
+            return False
+    
+    return True
 
 
-def start_containers(ctx: SetupContext) -> bool:
-    """Phase 8: Optionally start containers. Returns True if started."""
-    if _containers_running(ctx):
-        ctx.ok("Containers already running")
+def start_services(ctx: SetupContext) -> bool:
+    """Phase 8: Optionally start native services. Returns True if started."""
+    if _services_running(ctx):
+        ctx.ok("Services already running (native mode)")
         return True
 
-    if not ctx.confirm("Start containers now?", default=True):
+    if not ctx.confirm("Start services now?", default=True):
         return False
 
-    r = ctx.run_cmd_live(["mise", "run", "containers:up"], timeout=300,
-                         spinner_text="Starting containers...")
+    r = ctx.run_cmd_live(["mise", "run", "start"], timeout=60,
+                         spinner_text="Starting services (native mode)...")
     if r.ok:
         ctx.print("")
-        ctx.ok("Containers started")
+        ctx.ok("Services started (native mode)")
         return True
 
-    ctx.warn("Container start failed — run 'mise run containers:up' manually")
+    ctx.warn("Service start failed — run 'mise run start' manually")
     return False
 
 
@@ -1893,8 +1902,8 @@ def run_setup(ctx: SetupContext) -> int:
     # Phase 7: Login + validate
     first_login_and_validate(ctx, config, sso_configured)
 
-    # Phase 8: Containers
-    start_containers(ctx)
+    # Phase 8: Start services (native mode)
+    start_services(ctx)
 
     # Summary
     print_summary(ctx, config)

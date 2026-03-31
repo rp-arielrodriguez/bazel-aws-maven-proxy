@@ -16,7 +16,7 @@ from scripts.setup import (
     SetupContext, CmdResult, EnvConfig,
     run_setup, check_prerequisites, configure_env, install_tools,
     install_sso_watcher, check_macos_permissions, configure_sso,
-    first_login_and_validate, start_containers, print_summary,
+    first_login_and_validate, start_services, print_summary,
     BOLD, GREEN, YELLOW, RED, NC,
 )
 from pathlib import Path
