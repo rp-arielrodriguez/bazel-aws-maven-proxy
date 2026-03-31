@@ -103,7 +103,7 @@ case "$CMD" in
   detect-proxy)
     shift
     exec python3 scripts/setup.py --detect-proxy "$@" ;;
-  containers:*))
+  containers:*)
     exec mise run "$CMD" "$@" ;;
   config:set)
     exec mise run config:set "$@" ;;
