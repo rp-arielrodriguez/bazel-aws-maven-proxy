@@ -67,6 +67,12 @@ UPSTREAM_WRITE_BACK = os.environ.get(
 # (e.g. a cross-account mirror you can read but not write), so write-back goes
 # to a bucket you own instead.
 UPSTREAM_WRITE_BUCKET = os.environ.get('UPSTREAM_WRITE_BUCKET') or S3_BUCKET_NAME
+# Optional read-through fallback bucket. On a primary-bucket (S3_BUCKET_NAME) miss,
+# this bucket is tried BEFORE the upstream Maven mirror. Point it at the write-back
+# bucket (UPSTREAM_WRITE_BUCKET) so previously pulled-through artifacts are served
+# from S3 on every subsequent request — the upstream is then hit at most once per
+# artifact ever, instead of once per cold pod. Empty = no fallback (legacy behavior).
+READ_FALLBACK_BUCKET = os.environ.get('READ_FALLBACK_BUCKET') or ''
 # Timeout (seconds) for a single upstream fetch.
 try:
     UPSTREAM_TIMEOUT = int(os.environ.get('UPSTREAM_TIMEOUT', '60'))
@@ -169,11 +175,13 @@ def ensure_parent_dir_exists(file_path):
     parent_dir = os.path.dirname(file_path)
     Path(parent_dir).mkdir(parents=True, exist_ok=True)
 
-def fetch_from_s3(s3_client, path):
+def fetch_from_s3(s3_client, path, bucket=None):
     """
     Fetch a file from S3 and store it in the local cache.
+    Reads from `bucket` (defaults to S3_BUCKET_NAME).
     Returns the local file path if successful, None otherwise.
     """
+    bucket = bucket or S3_BUCKET_NAME
     # Remove leading slash if present
     s3_key = path
     if s3_key.startswith('/'):
@@ -190,8 +198,8 @@ def fetch_from_s3(s3_client, path):
     tmp_fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(local_path))
     os.close(tmp_fd)
     try:
-        logger.info(f"Fetching from S3: {S3_BUCKET_NAME}/{s3_key}")
-        s3_client.download_file(S3_BUCKET_NAME, s3_key, tmp_path)
+        logger.info(f"Fetching from S3: {bucket}/{s3_key}")
+        s3_client.download_file(bucket, s3_key, tmp_path)
         os.replace(tmp_path, local_path)
         logger.info(f"Successfully cached: {local_path}")
         return local_path
@@ -202,7 +210,7 @@ def fetch_from_s3(s3_client, path):
         except OSError:
             pass
         if e.response['Error']['Code'] == 'NoSuchKey':
-            logger.warning(f"File not found in S3: {S3_BUCKET_NAME}/{s3_key}")
+            logger.warning(f"File not found in S3: {bucket}/{s3_key}")
         else:
             logger.error(f"Error fetching from S3: {str(e)}")
         return None
@@ -312,8 +320,15 @@ def get_file(s3_client, file_path):
     
     if not os.path.exists(local_path):
         logger.info(f"Cache miss: {file_path}")
-        # Not in cache, try to fetch from S3
+        # Not in cache, try to fetch from the primary S3 bucket
         local_path = fetch_from_s3(s3_client, file_path)
+
+        if not local_path and READ_FALLBACK_BUCKET:
+            # Miss on the primary bucket — try the read-fallback (mirror) bucket,
+            # where pulled-through artifacts were written back. Serving from here
+            # means the upstream is hit at most once per artifact ever.
+            local_path = fetch_from_s3(
+                s3_client, file_path, bucket=READ_FALLBACK_BUCKET)
 
         if not local_path:
             # Not in S3 either — try the upstream Maven mirror (pull-through),
@@ -520,6 +535,7 @@ logger.info(f"S3 proxy configured: bucket={S3_BUCKET_NAME}, profile={AWS_PROFILE
             f"region={AWS_REGION}, cache={CACHE_DIR}, refresh={REFRESH_INTERVAL}s")
 logger.info(f"Pull-through mirror: upstream={UPSTREAM_MAVEN_URL or '(disabled)'}, "
             f"write_back={UPSTREAM_WRITE_BACK}, write_bucket={UPSTREAM_WRITE_BUCKET}, "
+            f"read_fallback_bucket={READ_FALLBACK_BUCKET or '(none)'}, "
             f"prefix_strip='{UPSTREAM_PREFIX_STRIP}'")
 
 if __name__ == '__main__':

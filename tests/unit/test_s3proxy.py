@@ -227,6 +227,23 @@ class TestFetchFromS3:
         call_args = mock_s3_client.download_file.call_args[0]
         assert call_args[1] == 'com/example/artifact.jar'
 
+    def test_fetch_from_s3_uses_explicit_bucket(self, mock_s3_client, temp_cache_dir):
+        """An explicit bucket arg overrides S3_BUCKET_NAME."""
+        file_path = "com/example/artifact.jar"
+
+        def mock_download(bucket, key, local_path):
+            Path(local_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(local_path).write_bytes(b"fake content")
+
+        mock_s3_client.download_file.side_effect = mock_download
+
+        with patch.object(app, 'CACHE_DIR', str(temp_cache_dir)):
+            with patch.object(app, 'S3_BUCKET_NAME', 'primary-bucket'):
+                app.fetch_from_s3(mock_s3_client, file_path, bucket='mirror-bucket')
+
+        call_args = mock_s3_client.download_file.call_args[0]
+        assert call_args[0] == 'mirror-bucket'
+
 
 @pytest.mark.unit
 class TestFlaskEndpoints:
@@ -297,6 +314,35 @@ class TestFlaskEndpoints:
                     response = flask_app.get('/com/example/missing.jar')
 
         assert response.status_code == 404
+
+    def test_get_file_falls_back_to_mirror_bucket(self, flask_app, mock_s3_client, temp_cache_dir):
+        """On a primary-bucket miss, READ_FALLBACK_BUCKET is served before upstream."""
+        file_path = "com/google/guava/guava/guava.jar"
+
+        def mock_download(bucket, key, local_path):
+            if bucket == 'primary-bucket':
+                raise ClientError(
+                    {'Error': {'Code': 'NoSuchKey', 'Message': 'Not found'}},
+                    'download_file')
+            Path(local_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(local_path).write_bytes(b"mirror content")
+
+        mock_s3_client.download_file.side_effect = mock_download
+
+        with patch.object(app, 'CACHE_DIR', str(temp_cache_dir)):
+            with patch.object(app, 'S3_BUCKET_NAME', 'primary-bucket'):
+                with patch.object(app, 'READ_FALLBACK_BUCKET', 'mirror-bucket'):
+                    # Upstream must NOT be reached when the fallback bucket has it.
+                    with patch.object(app, 'fetch_from_upstream') as mock_upstream:
+                        with patch.object(app, 'get_s3_client', return_value=mock_s3_client):
+                            response = flask_app.get(f'/{file_path}')
+
+        assert response.status_code == 200
+        assert response.data == b"mirror content"
+        mock_upstream.assert_not_called()
+        # Both buckets were tried, primary first then the fallback.
+        buckets_tried = [c[0][0] for c in mock_s3_client.download_file.call_args_list]
+        assert buckets_tried == ['primary-bucket', 'mirror-bucket']
 
     def test_path_traversal_returns_403(self, flask_app, mock_s3_client):
         """Path traversal attempt returns 403."""
