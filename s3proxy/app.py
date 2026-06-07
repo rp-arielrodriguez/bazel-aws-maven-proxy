@@ -25,7 +25,7 @@ app = Flask(__name__)
 
 # Configuration from environment variables
 S3_BUCKET_NAME = os.environ.get('S3_BUCKET_NAME')
-AWS_PROFILE = os.environ.get('AWS_PROFILE', 'default')
+AWS_PROFILE = os.environ.get('AWS_PROFILE', '')  # '' = use default credential chain (IRSA/env/instance role)
 AWS_REGION = os.environ.get('AWS_REGION', 'us-west-2')
 CACHE_DIR = os.environ.get('CACHE_DIR', '/data')
 LOG_LEVEL = os.environ.get('LOG_LEVEL', 'info').upper()
@@ -72,7 +72,13 @@ def get_s3_client():
             return s3_client
 
         try:
-            session = boto3.Session(profile_name=AWS_PROFILE)
+            # If AWS_PROFILE is empty/unset, use the default credential chain.
+            # This supports IRSA / instance-role / env-var credentials in
+            # containers where no ~/.aws/config profile exists.
+            if AWS_PROFILE:
+                session = boto3.Session(profile_name=AWS_PROFILE)
+            else:
+                session = boto3.Session()
             creds = session.get_credentials()
             if creds is None:
                 raise Exception("No credentials found for profile")
