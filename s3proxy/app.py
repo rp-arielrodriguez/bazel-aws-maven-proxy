@@ -4,6 +4,8 @@ import logging
 import threading
 import mimetypes
 import tempfile
+import urllib.request
+import urllib.error
 from pathlib import Path
 from functools import wraps
 from datetime import datetime, timezone
@@ -40,6 +42,36 @@ except ValueError:
     _refresh_ms = 60000
 _refresh_ms = max(_refresh_ms, 5000)  # minimum 5000ms
 REFRESH_INTERVAL = _refresh_ms // 1000  # ms → s
+
+# Pull-through mirror: on an S3 miss, optionally fetch the artifact from an
+# upstream Maven repository and write it back to S3. This turns the bucket into
+# a self-filling mirror — the upstream is hit at most once per artifact, ever,
+# and every subsequent request (any client) is served from S3.
+#
+# Default upstream is Google's Maven Central mirror: byte-identical to Maven
+# Central, operated for high-volume CI traffic, and (unlike repo1.maven.org) it
+# does not rate-limit per IP — so even a cold fill won't get a 429.
+# Set UPSTREAM_MAVEN_URL='' to disable pull-through (legacy serve-only behavior).
+UPSTREAM_MAVEN_URL = os.environ.get(
+    'UPSTREAM_MAVEN_URL',
+    'https://maven-central.storage-download.googleapis.com/maven2').rstrip('/')
+# Prefix stripped from the request key before appending to the upstream URL.
+# The bucket stores artifacts under 'm2/...'; the upstream serves '<base>/...'.
+UPSTREAM_PREFIX_STRIP = os.environ.get('UPSTREAM_PREFIX_STRIP', 'm2/')
+# Write fetched artifacts back to S3 (the self-filling behavior). Requires
+# s3:PutObject on the write bucket. Disable to fetch-through without persisting.
+UPSTREAM_WRITE_BACK = os.environ.get(
+    'UPSTREAM_WRITE_BACK', 'true').strip().lower() in ('1', 'true', 'yes', 'on')
+# Bucket to write pulled-through artifacts to. Defaults to S3_BUCKET_NAME, but
+# can target a different bucket — useful when the read bucket is read-only
+# (e.g. a cross-account mirror you can read but not write), so write-back goes
+# to a bucket you own instead.
+UPSTREAM_WRITE_BUCKET = os.environ.get('UPSTREAM_WRITE_BUCKET') or S3_BUCKET_NAME
+# Timeout (seconds) for a single upstream fetch.
+try:
+    UPSTREAM_TIMEOUT = int(os.environ.get('UPSTREAM_TIMEOUT', '60'))
+except ValueError:
+    UPSTREAM_TIMEOUT = 60
 
 # Set log level based on environment variable
 logger.setLevel(getattr(logging, LOG_LEVEL))
@@ -181,6 +213,67 @@ def fetch_from_s3(s3_client, path):
             pass
         raise
 
+def fetch_from_upstream(s3_client, path):
+    """
+    On an S3 miss, fetch the artifact from the upstream Maven mirror, cache it
+    locally, and (if enabled) write it back to S3 so the bucket self-fills.
+    Returns the local file path on success, None otherwise.
+    """
+    if not UPSTREAM_MAVEN_URL:
+        return None
+
+    rel = path[1:] if path.startswith('/') else path
+    if UPSTREAM_PREFIX_STRIP and rel.startswith(UPSTREAM_PREFIX_STRIP):
+        rel = rel[len(UPSTREAM_PREFIX_STRIP):]
+    url = f"{UPSTREAM_MAVEN_URL}/{rel}"
+
+    local_path = get_cached_file_path(path)
+    if local_path is None:
+        return None
+    ensure_parent_dir_exists(local_path)
+
+    try:
+        logger.info(f"Upstream fetch: {url}")
+        req = urllib.request.Request(
+            url, headers={'User-Agent': 'bazel-aws-maven-proxy/pull-through'})
+        with urllib.request.urlopen(req, timeout=UPSTREAM_TIMEOUT) as resp:
+            data = resp.read()
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            logger.warning(f"Upstream 404: {url}")
+        else:
+            logger.error(f"Upstream error {e.code}: {url}")
+        return None
+    except Exception as e:
+        logger.error(f"Upstream fetch failed for {url}: {e}")
+        return None
+
+    # Atomic local write (temp + rename), mirroring fetch_from_s3.
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(local_path))
+    os.close(tmp_fd)
+    try:
+        with open(tmp_path, 'wb') as f:
+            f.write(data)
+        os.replace(tmp_path, local_path)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+    # Write back to S3 so the bucket self-fills. Best-effort: a write-back
+    # failure must not break serving the artifact we already have in hand.
+    if UPSTREAM_WRITE_BACK:
+        s3_key = path[1:] if path.startswith('/') else path
+        try:
+            s3_client.put_object(Bucket=UPSTREAM_WRITE_BUCKET, Key=s3_key, Body=data)
+            logger.info(f"Wrote back to s3://{UPSTREAM_WRITE_BUCKET}/{s3_key} ({len(data)} bytes)")
+        except Exception as e:
+            logger.warning(f"S3 write-back failed for {UPSTREAM_WRITE_BUCKET}/{s3_key} (serving anyway): {e}")
+
+    return local_path
+
 @app.route('/healthz')
 def health_check():
     """Health check endpoint."""
@@ -221,9 +314,14 @@ def get_file(s3_client, file_path):
         logger.info(f"Cache miss: {file_path}")
         # Not in cache, try to fetch from S3
         local_path = fetch_from_s3(s3_client, file_path)
-        
+
         if not local_path:
-            # File not found in S3
+            # Not in S3 either — try the upstream Maven mirror (pull-through),
+            # writing the result back to S3 so the bucket self-fills.
+            local_path = fetch_from_upstream(s3_client, file_path)
+
+        if not local_path:
+            # Not in cache, S3, or upstream
             abort(404)
     else:
         logger.debug(f"Cache hit: {file_path}")
@@ -420,6 +518,9 @@ except OSError:
 
 logger.info(f"S3 proxy configured: bucket={S3_BUCKET_NAME}, profile={AWS_PROFILE}, "
             f"region={AWS_REGION}, cache={CACHE_DIR}, refresh={REFRESH_INTERVAL}s")
+logger.info(f"Pull-through mirror: upstream={UPSTREAM_MAVEN_URL or '(disabled)'}, "
+            f"write_back={UPSTREAM_WRITE_BACK}, write_bucket={UPSTREAM_WRITE_BUCKET}, "
+            f"prefix_strip='{UPSTREAM_PREFIX_STRIP}'")
 
 if __name__ == '__main__':
     # Local dev server (container uses gunicorn via Dockerfile CMD)
