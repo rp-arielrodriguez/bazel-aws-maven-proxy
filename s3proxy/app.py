@@ -143,6 +143,10 @@ def get_s3_client():
 
     return s3_client
 
+class UpstreamFetchError(Exception):
+    """The configured upstream could not provide a reliable artifact response."""
+
+
 def with_s3_client(f):
     """Decorator to provide a function with a refreshed S3 client."""
     @wraps(f)
@@ -152,6 +156,9 @@ def with_s3_client(f):
             client = get_s3_client()
             # Pass the client to the function
             return f(client, *args, **kwargs)
+        except UpstreamFetchError as e:
+            logger.error(f"Upstream access error: {e}")
+            return jsonify(error="Upstream Maven repository request failed"), 502
         except (ClientError, NoCredentialsError) as e:
             logger.error(f"S3 access error: {str(e)}")
             # Return an appropriate error response
@@ -175,11 +182,12 @@ def ensure_parent_dir_exists(file_path):
     parent_dir = os.path.dirname(file_path)
     Path(parent_dir).mkdir(parents=True, exist_ok=True)
 
-def fetch_from_s3(s3_client, path, bucket=None):
+def fetch_from_s3(s3_client, path, bucket=None, cache_path=None):
     """
     Fetch a file from S3 and store it in the local cache.
     Reads from `bucket` (defaults to S3_BUCKET_NAME).
-    Returns the local file path if successful, None otherwise.
+    Returns the local file path on success, None for a missing key or invalid
+    cache path. Other S3 failures propagate to the route error handler.
     """
     bucket = bucket or S3_BUCKET_NAME
     # Remove leading slash if present
@@ -187,7 +195,7 @@ def fetch_from_s3(s3_client, path, bucket=None):
     if s3_key.startswith('/'):
         s3_key = s3_key[1:]
     
-    local_path = get_cached_file_path(path)
+    local_path = get_cached_file_path(cache_path or path)
     if local_path is None:
         return None
     
@@ -209,11 +217,11 @@ def fetch_from_s3(s3_client, path, bucket=None):
             os.unlink(tmp_path)
         except OSError:
             pass
-        if e.response['Error']['Code'] == 'NoSuchKey':
+        if e.response['Error']['Code'] in ('NoSuchKey', '404'):
             logger.warning(f"File not found in S3: {bucket}/{s3_key}")
-        else:
-            logger.error(f"Error fetching from S3: {str(e)}")
-        return None
+            return None
+        logger.error(f"Error fetching from S3: {str(e)}")
+        raise
     except Exception:
         try:
             os.unlink(tmp_path)
@@ -225,7 +233,8 @@ def fetch_from_upstream(s3_client, path):
     """
     On an S3 miss, fetch the artifact from the upstream Maven mirror, cache it
     locally, and (if enabled) write it back to S3 so the bucket self-fills.
-    Returns the local file path on success, None otherwise.
+    Returns the local file path on success, None for HTTP 404, disabled upstream,
+    or an invalid cache path. Other fetch failures raise UpstreamFetchError.
     """
     if not UPSTREAM_MAVEN_URL:
         return None
@@ -247,14 +256,13 @@ def fetch_from_upstream(s3_client, path):
         with urllib.request.urlopen(req, timeout=UPSTREAM_TIMEOUT) as resp:
             data = resp.read()
     except urllib.error.HTTPError as e:
+        e.close()
         if e.code == 404:
             logger.warning(f"Upstream 404: {url}")
-        else:
-            logger.error(f"Upstream error {e.code}: {url}")
-        return None
+            return None
+        raise UpstreamFetchError(f"HTTP {e.code} from {url}") from e
     except Exception as e:
-        logger.error(f"Upstream fetch failed for {url}: {e}")
-        return None
+        raise UpstreamFetchError(f"Fetch failed for {url}: {e}") from e
 
     # Atomic local write (temp + rename), mirroring fetch_from_s3.
     tmp_fd, tmp_path = tempfile.mkstemp(dir=os.path.dirname(local_path))
@@ -289,6 +297,20 @@ def health_check():
         return "OK", 200
     # No client yet — first request will initialize
     return "OK", 200
+
+@app.route('/private-m2/<path:artifact>')
+@with_s3_client
+def get_private_file(s3_client, artifact):
+    """Resolve only against the primary bucket; never reuse mixed-origin cache."""
+    if any(part in ('', '.', '..') for part in artifact.split('/')) or '\\' in artifact:
+        abort(400)
+    # Always revalidate against S3 when Remote Asset asks the origin.
+    local_path = fetch_from_s3(s3_client, 'm2/' + artifact,
+                               cache_path='private-m2/' + artifact)
+    if local_path is None:
+        abort(404)
+    return send_file(local_path, mimetype=mimetypes.guess_type(local_path)[0])
+
 
 @app.route('/<path:file_path>')
 @app.route('/', defaults={'file_path': ''})
