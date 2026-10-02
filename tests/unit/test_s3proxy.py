@@ -311,7 +311,8 @@ class TestFlaskEndpoints:
         with patch.object(app, 'CACHE_DIR', str(temp_cache_dir)):
             with patch.object(app, 'S3_BUCKET_NAME', 'test-bucket'):
                 with patch.object(app, 'get_s3_client', return_value=mock_s3_client):
-                    response = flask_app.get('/com/example/missing.jar')
+                    with patch.object(app, 'UPSTREAM_MAVEN_URL', ''):
+                        response = flask_app.get('/com/example/missing.jar')
 
         assert response.status_code == 404
 
