@@ -1,0 +1,5 @@
+# Keep the deployed runtime and change only the reviewed application source.
+# Build from the repository root with: docker build --platform linux/amd64 \
+#   -f s3proxy/Dockerfile.release -t bb-s3-native:private-maven-release .
+FROM 737351263062.dkr.ecr.sa-east-1.amazonaws.com/bb-s3-native@sha256:6b40bb82176888996f1b3a2891b45726c892f8817cd3b3ff039bae33ac58d0c3
+COPY s3proxy/app.py /app/app.py
