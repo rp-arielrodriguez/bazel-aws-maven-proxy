@@ -3,6 +3,7 @@ import time
 import logging
 import threading
 import mimetypes
+import ssl
 import tempfile
 import urllib.request
 import urllib.error
@@ -72,6 +73,22 @@ try:
     UPSTREAM_TIMEOUT = int(os.environ.get('UPSTREAM_TIMEOUT', '60'))
 except ValueError:
     UPSTREAM_TIMEOUT = 60
+
+
+def build_upstream_ssl_context(ca_bundle):
+    """
+    TLS context for upstream fetches. urllib ignores AWS_CA_BUNDLE (only boto3
+    reads it), so behind an SSL-inspecting corporate proxy the upstream fetch
+    fails unless it is given the same bundle explicitly.
+    """
+    if ca_bundle and not os.path.isfile(ca_bundle):
+        raise ValueError(
+            f"AWS_CA_BUNDLE points to a missing file: {ca_bundle}. "
+            "Run 'bazel-proxy detect-proxy --force' or unset AWS_CA_BUNDLE.")
+    return ssl.create_default_context(cafile=ca_bundle or None)
+
+
+UPSTREAM_SSL_CONTEXT = build_upstream_ssl_context(os.environ.get('AWS_CA_BUNDLE'))
 
 # Set log level based on environment variable
 logger.setLevel(getattr(logging, LOG_LEVEL))
@@ -236,7 +253,8 @@ def fetch_from_upstream(s3_client, path):
         logger.info(f"Upstream fetch: {url}")
         req = urllib.request.Request(
             url, headers={'User-Agent': 'bazel-aws-maven-proxy/pull-through'})
-        with urllib.request.urlopen(req, timeout=UPSTREAM_TIMEOUT) as resp:
+        with urllib.request.urlopen(
+                req, timeout=UPSTREAM_TIMEOUT, context=UPSTREAM_SSL_CONTEXT) as resp:
             data = resp.read()
     except urllib.error.HTTPError as e:
         if e.code == 404:
