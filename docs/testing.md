@@ -24,7 +24,7 @@ tests/
 
 ## Test Coverage
 
-**493 passing tests** (22 s3proxy + 224 watcher + 52 monitor + 195 setup)
+Run the full suite for the current test count.
 
 ### S3 Proxy Tests (`tests/unit/test_s3proxy.py`)
 
@@ -409,3 +409,10 @@ def test_signal_handling(tmp_path):
 - flask, boto3 (required by s3proxy)
 
 See `tests/requirements.txt` for full list.
+
+## Origin status contract
+
+`tests/unit/test_origin_status.py` tests private primary-bucket routing,
+separation from mixed-origin disk cache, GET/HEAD results, invalid paths,
+S3 failure classification, and public HTTP/transport errors. Local HTTP
+origins and mocked S3 isolate these tests from AWS and the running proxy.

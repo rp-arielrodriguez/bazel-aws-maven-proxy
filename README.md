@@ -420,13 +420,36 @@ bazel-proxy stop && bazel-proxy start
 |----------|-------------|
 | [docs/sso-watcher.md](docs/sso-watcher.md) | SSO watcher architecture and internals |
 | [docs/state-machine.md](docs/state-machine.md) | State diagrams (Mermaid) for modes, signals, cooldown |
-| [docs/testing.md](docs/testing.md) | Test structure and coverage (493 tests) |
+| [docs/testing.md](docs/testing.md) | Test structure and coverage |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute |
+
+## Private Maven origin route
+
+`GET` and `HEAD /private-m2/<artifact>` read only `m2/<artifact>` from the
+primary `S3_BUCKET_NAME`. This route does not use the mirror bucket or public
+upstream. It revalidates each origin request and uses a separate disk path, so
+an old public or mirror copy cannot satisfy a private request. Shared Remote
+Asset/CAS caching belongs in the caller.
+
+The existing `/m2/` successful cache, primary, mirror, and public fallback paths
+remain available. Error responses now distinguish missing artifacts from
+backend failures on both routes: S3 `NoSuchKey`/`404` and public HTTP `404` are
+misses; other S3 failures return `500`, and public HTTP/transport failures
+return `502`. A failed S3 request does not fall through to another origin.
+This changes previous error behavior, which could turn failures into `404`.
+
+The shared INFRA release uses `s3proxy/Dockerfile.release`, which pins the
+previous deployed image and replaces only `/app/app.py`. Build from the
+repository root with the command in that Dockerfile. This preserves the
+existing Python runtime, dependencies, entrypoint, and health check; it does
+not update their versions. Registry pull access is required. Keep the prior
+image digest for rollback. The regular developer Dockerfile remains unchanged.
+
 
 ## Testing
 
 ```bash
-pytest              # Run all 493 tests
+pytest              # Run all tests
 ./run_tests.sh      # Helper script
 ```
 
