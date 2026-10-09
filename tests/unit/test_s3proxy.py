@@ -360,3 +360,39 @@ def test_with_s3_client_decorator_handles_errors():
         # Should return JSON error response
         assert isinstance(response, tuple)
         assert response[1] == 500
+
+
+class TestUpstreamTls:
+    """Upstream fetch trusts the same CA bundle as boto3 (AWS_CA_BUNDLE)."""
+
+    def test_uses_default_trust_store_without_ca_bundle(self):
+        with patch('app.ssl.create_default_context') as mock_ctx:
+            app.build_upstream_ssl_context(None)
+
+        mock_ctx.assert_called_once_with(cafile=None)
+
+    def test_uses_ca_bundle_when_set(self, tmp_path):
+        bundle = tmp_path / "bundle.pem"
+        bundle.write_text("")
+        with patch('app.ssl.create_default_context') as mock_ctx:
+            app.build_upstream_ssl_context(str(bundle))
+
+        mock_ctx.assert_called_once_with(cafile=str(bundle))
+
+    def test_missing_ca_bundle_fails_fast_naming_the_variable(self, tmp_path):
+        missing = tmp_path / "missing.pem"
+
+        with pytest.raises(ValueError, match="AWS_CA_BUNDLE"):
+            app.build_upstream_ssl_context(str(missing))
+
+    def test_fetch_from_upstream_uses_upstream_ssl_context(self, temp_cache_dir):
+        response = MagicMock()
+        response.read.return_value = b"<project/>"
+        response.__enter__.return_value = response
+        with patch.object(app, 'CACHE_DIR', str(temp_cache_dir)), \
+             patch.object(app, 'UPSTREAM_WRITE_BACK', False), \
+             patch('app.urllib.request.urlopen', return_value=response) as mock_urlopen:
+            result = app.fetch_from_upstream(MagicMock(), '/m2/g/a/1/a-1.pom')
+
+        assert result is not None
+        assert mock_urlopen.call_args.kwargs['context'] is app.UPSTREAM_SSL_CONTEXT
