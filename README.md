@@ -4,6 +4,13 @@
 
 Transparent proxy layer between Bazel builds and private AWS S3 Maven repositories with AWS SSO support.
 
+> **In-cluster bridge moved:** the `s3proxy` service as deployed in RecargaPay's
+> `cluster-infra` (`bb-s3-native`) now lives in `recarga/devex` under
+> `rbe-maven-proxy/backend/s3-bridge/`, with this repository's history, and is built
+> and published from there. Make changes to that deployment in devex. This
+> repository remains the local developer tool (native/container proxy and SSO
+> automation).
+
 ## The Problem
 
 Engineers using Bazel with private Maven repositories in AWS S3 face challenges:

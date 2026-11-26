@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+**In-cluster bridge moved:** changes to the `s3proxy` service as deployed in `cluster-infra` (`bb-s3-native`) belong in `recarga/devex` under `rbe-maven-proxy/backend/s3-bridge/`, which is built and published from there. Don't make them here. This repository remains the local developer tool.
+
 ## Overview
 
 This project provides a transparent proxy layer between Bazel builds and S3-hosted Maven repositories with automated AWS SSO authentication support. Native mode runs Python processes directly (default); container mode available as alternative. Supports Podman and Docker.
